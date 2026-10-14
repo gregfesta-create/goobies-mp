@@ -147,6 +147,13 @@ function App.new(opts)
     self.env, self.bridge = opts.env, opts.bridge
     self.cfg, self.cfgErrors = Config.Parse(opts.configText)
     self.extras = parseExtras(opts.configText)
+    -- Test 15 stutters (Coder B): the opt-in Lua collector switch (gmp_lua_gc.lua; off without LUA_GC_* keys)
+    do
+        local GC = require('gmp_lua_gc')
+        local settings, problem = GC.Parse(opts.configText)
+        self.luaGc = GC.new(settings, { collect = opts.gcCollect, problem = problem, log = function(line) self:_log('%s', line) end })
+        self.luaGc:Apply()
+    end
     if not Mode.Allows(self.cfg.MODE, "dev_scaffolding") then for _, row in ipairs(RESERVED_EXTRAS) do if row.devOnly then self.extras[row.field] = false end end end
     self.extras.clientUpgradeDamage = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.clientUpgradeDamage == true
     self.extras.clientDamage = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.clientDamage == true
@@ -1612,6 +1619,8 @@ function App:_newEnemyCapture()
     if not world or not self.bridge or type(self.bridge.G)~='table' then return nil,'missing_native_enemy_world' end
     return require('gmp_enemy_capture').new(self.bridge.G,{
         active=function() return self.role=='host' and self.host and self.host.islands.phase=='playing' end,
+        -- Coder B (test 15 rejoin stall): the spawn hooks do nothing until the island is visible
+        visible=function() local w=self.islandFlow and self.islandFlow.world;return not w or type(w.DiagnosticVisible)~='function' or w:DiagnosticVisible()==true end,
         token=function() return self.host and (self.host.islands.epoch..':'..self.host.islands.island) end,
         begin=function() self.host:BeginEnemyIsland() end,
         registry=function() return self.host and self.host.enemies end,
@@ -1939,7 +1948,9 @@ function App:_tickWorldFrame()
     local world=self.islandFlow and self.islandFlow.world
     if type(world)=='table' and type(world.NextFrame)=='function' then pcall(world.NextFrame,world) end
 end
+function App:_tickLuaGc() if self.luaGc then self.luaGc:Tick(self.role) end end   -- Coder B: clients only, see gmp_lua_gc.lua
 function App:Tick(dt)
+    self:_tickLuaGc()
     self:_tickWorldFrame()
     self:_tickBootDriver(dt)
     if self.state=='dev_socket_lobby'then self.clockNow=(self.clockNow or 0)+(dt or 0)end

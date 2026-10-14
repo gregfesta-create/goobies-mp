@@ -117,10 +117,22 @@ function C:RetargetRegistry(registry)
     end
     return self:AdoptRestored(self.manager,self.token,registry,bindings)
 end
+-- Test 15 rejoin stall (Coder B): the hooks live as long as the process and fire for every native spawn, also while a
+-- level loads and after this window stopped hosting. Before touching the call's context: this window must host a
+-- playing island (options.active), and until the capture has bound this island it must also be visible
+-- (options.visible, when given). Once bound, a reward screen or fade never drops a spawn (that would restart it).
+function C:_live()
+    if not self.options.active() then return false end
+    local visible=self.options.visible
+    if visible==nil or (self.observer and self.manager and self.token~=nil and self.token==self.options.token()) then return true end
+    return visible()==true
+end
 function C:_before(context)
+    if not self:_live() then return end
     self:_ensure(context:get())
 end
 function C:_after(path,context,...)
+    if not self:_live() then return end
     local manager=context:get();if not self:_ensure(manager) then return end
     local params={...};local output=assert(params[self.slotParams[path]],'Native spawn output parameter missing'):get()
     local slots,selected={},{}

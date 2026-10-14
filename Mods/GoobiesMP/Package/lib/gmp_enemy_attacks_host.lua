@@ -29,6 +29,11 @@ A.PLAYER_RADIUS = 50       -- BP_Player's collision radius (approximate)
 A.MORTAR_FACTOR = 0.75
 A.EXPLOSION_FACTOR = 3.5
 A.MAX_DAMAGE = 100000
+-- Boss mutations (Coder B, 2026-10-14; research/BOSS_LOGIC_STATIC.md): the game's own numbers
+A.FIRETRAIL_RADIUS_FACTOR, A.FIRETRAIL_FACTOR = 0.5, 0.5
+A.SPEW_FACTOR = 1.3
+A.SWEEP_RADIUS, A.SWEEP_LENGTH, A.SWEEP_FACTOR = 80, 5000, 2
+A.DEATHAURA_TICK_FACTOR = 0.1
 
 local function finite(v) return type(v) == 'number' and v == v and math.abs(v) <= 2000000 end
 
@@ -90,6 +95,39 @@ function A.Damage(event, x, y)
         if not finite(event.damage) or event.damage <= 0 then return nil end
         local p = ps[1]
         if (p.x - x) ^ 2 + (p.y - y) ^ 2 < A.ZIGRID_RADIUS ^ 2 then return event.damage end
+    -- boss mutations (Coder B): see the header
+    elseif event.kind == 'firetrail' then
+        if not finite(event.damage) or event.damage <= 0 then return nil end
+        if anyWithin(ps, x, y, A.PLAYER_RADIUS) then return event.damage end   -- the game's loop stops at the first hit
+    elseif event.kind == 'spew' then
+        if not finite(event.damageScale) or event.damageScale <= 0 then return nil end
+        local n = 0
+        for _, p in ipairs(ps) do
+            local r = (p.size or 0) + A.PLAYER_RADIUS
+            if (p.x - x) ^ 2 + (p.y - y) ^ 2 <= r * r then n = n + 1 end
+        end
+        if n > 0 then return event.damageScale * A.SPEW_FACTOR * n end
+    elseif event.kind == 'sweep' then
+        if not finite(event.damage) or event.damage <= 0 then return nil end
+        local n = 0
+        for _, p in ipairs(ps) do
+            if finite(p.vx) and finite(p.vy) and (p.vx ~= 0 or p.vy ~= 0) then
+                -- the game's trace runs from Position - Velocity x 5000 to Position + Velocity x 5000
+                local ax, ay = p.x - p.vx * A.SWEEP_LENGTH, p.y - p.vy * A.SWEEP_LENGTH
+                local dx, dy = 2 * p.vx * A.SWEEP_LENGTH, 2 * p.vy * A.SWEEP_LENGTH
+                local t = ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)
+                if t < 0 then t = 0 elseif t > 1 then t = 1 end
+                local px, py = ax + dx * t, ay + dy * t
+                local r = (p.size or A.SWEEP_RADIUS) + A.PLAYER_RADIUS
+                if (x - px) ^ 2 + (y - py) ^ 2 <= r * r then n = n + 1 end
+            end
+        end
+        if n > 0 then return event.damage * n end
+    elseif event.kind == 'deathaura_bomb' or event.kind == 'deathaura_tick' then
+        local r = event.radius
+        if not finite(event.damage) or event.damage <= 0 or not finite(r) or r <= 0 then return nil end
+        local p = ps[1]
+        if (p.x - x) ^ 2 + (p.y - y) ^ 2 < r * r then return event.damage end   -- the game: distance to the player < radius
     end
     return nil
 end
@@ -206,9 +244,16 @@ Capture.PATHS = {
     magmus_balls = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/BP_Logic_Magmus_Balls.BP_Logic_Magmus_Balls_C:ReceiveParticleData',
     gaia_aoe = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/BP_Logic_Gaia.BP_Logic_Gaia_C:Deal AOE DamageToPlayer',
     zigrid = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/BP_Logic_Zigrid.BP_Logic_Zigrid_C:ReceiveParticleData',
+    -- boss mutations (Coder B, 2026-10-14)
+    firetrail = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/Mutations/BP_Mutation_FireTrail.BP_Mutation_FireTrail_C:ReceiveParticleData',
+    spew = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/Mutations/BP_Mutation_Spew.BP_Mutation_Spew_C:ReceiveParticleData',
+    sweep = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/Mutations/BP_Mutation_Sweep.BP_Mutation_Sweep_C:ReceiveParticleData',
+    deathaura_bomb = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/Mutations/BP_Mutation_DeathAura.BP_Mutation_DeathAura_C:ReceiveParticleData',
+    deathaura_tick = '/Game/Blueprints/EnemyController/EnemyActors/Bosses/Mutations/BP_Mutation_DeathAura.BP_Mutation_DeathAura_C:DeathTick',
 }
 -- the kinds whose game damage may be misrouted to a stand-in (see the header)
-Capture.COMPUTED = { mortar = true, magmus_balls = true, gaia_aoe = true, zigrid = true }
+Capture.COMPUTED = { mortar = true, magmus_balls = true, gaia_aoe = true, zigrid = true,
+    firetrail = true, spew = true, sweep = true, deathaura_bomb = true, deathaura_tick = true }
 -- The hooks live as long as the process: one state per Lua state (G) with the registered kinds, ONE shared queue and the
 -- newest capture's activity check, so a later run (a new Capture) never registers twice and still receives the events.
 local STATES = setmetatable({}, { __mode = 'k' })
@@ -235,7 +280,12 @@ local function particleList(param)
             if #out >= Capture.PARTICLES_MAX then return end
             local d = get(elem)
             local pos = d and d.Position
-            if pos and finite(pos.X) and finite(pos.Y) then out[#out + 1] = { x = pos.X, y = pos.Y, size = d.Size or 0 } end
+            if pos and finite(pos.X) and finite(pos.Y) then
+                local row = { x = pos.X, y = pos.Y, size = d.Size or 0 }
+                local v = d.Velocity
+                if v and finite(v.X) and finite(v.Y) then row.vx, row.vy = v.X, v.Y end
+                out[#out + 1] = row
+            end
         end)
     end)
     return out
@@ -250,7 +300,16 @@ local function callback(st, kind)
             local owner = get(context)
             if owner == nil then return end
             local event = { kind = kind }
-            if kind == 'gaia_aoe' then
+            local daddyOf = owner.Daddy
+            if kind == 'deathaura_tick' then
+                -- DeathTick: no particles; around the mutation (it sits on its boss)
+                local okL, at = pcall(function() return owner:K2_GetActorLocation() end)
+                if not okL or not at or not finite(at.X) or not finite(at.Y) or not daddyOf then return end
+                event.particles = { { x = at.X, y = at.Y, size = 0 } }
+                event.radius = owner.DeathAuraRadius
+                event.damage = (daddyOf.Damage or 0) * A.DEATHAURA_TICK_FACTOR
+                event.target = fullName(daddyOf['As BP Player'])
+            elseif kind == 'gaia_aoe' then
                 local start, r, m = get(data), get(radius), get(multi)
                 local daddy = owner.Daddy
                 if not start or not finite(start.X) or not finite(r) or not finite(m) or not daddy then return end
@@ -274,6 +333,27 @@ local function callback(st, kind)
                     event.damage = daddy and (daddy.Damage or 0) * A.ZIGRID_FACTOR
                     event.target = fullName(daddy and daddy['As BP Player'])
                     event.particles = { event.particles[1] }
+                elseif kind == 'firetrail' then
+                    if not daddyOf then return end
+                    for _, p in ipairs(event.particles) do p.size = (p.size or 0) * A.FIRETRAIL_RADIUS_FACTOR end
+                    event.damage = (daddyOf.Damage or 0) * A.FIRETRAIL_FACTOR
+                    event.target = fullName(daddyOf['As BP Player'])
+                elseif kind == 'spew' then
+                    local player = daddyOf and daddyOf['As BP Player']
+                    local controller = player and player.EnemyController
+                    event.damageScale = controller and controller.EnemyDamageScale
+                    event.target = fullName(player)
+                elseif kind == 'sweep' then
+                    if not daddyOf then return end
+                    for _, p in ipairs(event.particles) do p.size = A.SWEEP_RADIUS end
+                    event.damage = (daddyOf.Damage or 0) * A.SWEEP_FACTOR
+                    event.target = fullName(daddyOf['As BP Player'])
+                elseif kind == 'deathaura_bomb' then
+                    if not daddyOf then return end
+                    event.particles = { event.particles[1] }
+                    event.radius = owner.ExplosionRadius
+                    event.damage = (daddyOf.Damage or 0) * (owner.Damage or 0)
+                    event.target = fullName(daddyOf['As BP Player'])
                 end
             end
             st.queue[#st.queue + 1] = event

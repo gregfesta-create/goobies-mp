@@ -1,21 +1,24 @@
 # Goobies Multiplayer (friend test build)
 
-Online multiplayer for Goobies, played with friends over Steam. **Version 1.0.0-test.1 is a friend test build:** it is still
+Online multiplayer for Goobies, played with friends over Steam. **Version 1.0.0-test.2 is a friend test build:** it is still
 in development, things will break, and it exists so we can test together. It is not the final release.
 
 ## Requirements
 
 - Goobies on Steam (Windows). Every player needs their own copy.
-- Nothing else: Mod Menu, its UE4SS loader, Menu Options and Goobies Multiplayer are all in the zip.
-- Every player must use the same build. The lobby compares the mods when you join.
+- **Requires Mod Menu 1.1.0-test.1 or newer**: [download it here](https://github.com/gregfesta-create/goobies-mod-menu/releases/tag/v1.1.0-test.1); install both, in any order.
+  Every Goobies mod needs Mod Menu; it also brings the UE4SS mod loader.
+- Optional: Menu Options ([goobies-menu-options](https://github.com/gregfesta-create/goobies-menu-options/releases)).
+- Every player must use the same builds. The lobby compares the mods when you join.
 
 ## Install
 
-1. Download `goobies_mp_friend_1.0.0-test.1.zip` from the release. If Windows marks it as blocked: right-click it, *Properties*, tick **Unblock**.
-2. Find the game folder: in Steam, right-click Goobies, *Manage > Browse local files*. Open `Shooter\Binaries\Win64`
+1. Find the game folder: in Steam, right-click Goobies, *Manage > Browse local files*. Open `Shooter\Binaries\Win64`
    (the folder with `Shooter-Win64-Shipping.exe`); below this is called `Win64`.
-3. Back up `%LOCALAPPDATA%\Shooter\Saved\SaveGames`, and your `Win64\Mods` and `Win64\Configs` if you use other UE4SS mods.
-4. Put the zip into `Win64` and extract it there (*right-click > Extract All*, target `Win64` itself). Allow it to replace files.
+2. Back up `%LOCALAPPDATA%\Shooter\Saved\SaveGames`.
+3. If Windows marks a downloaded zip as blocked: right-click it, *Properties*, tick **Unblock**.
+4. Put `goobies_mp_1.0.0-test.2.zip` and the Mod Menu zip into `Win64` and extract each there (*right-click > Extract All*, target `Win64`
+   itself). The two zips share no files, so install both, in any order. Menu Options, if you want it, also goes into `Win64`.
 5. **Achievement blocker** (optional for now, built-in blocking is coming in a Mod Menu update). It keeps Steam
    achievements from unlocking. It is the one part that cannot be extracted in place; `Win64\_achievement_blocker_move_me\README.txt` has the same steps:
    1. Open `<game>\Shooter\Plugins\SteamCorePro\SteamCorePro\Source\ThirdParty\SteamLibrary\redistributable_bin\win64\`.
@@ -24,7 +27,7 @@ in development, things will break, and it exists so we can test together. It is 
 
    While the blocker is installed no achievement unlocks, in single player too. After a Goobies update, check that
    folder again. To remove it, delete the blocker and rename `steam_api64_original.dll` back (or verify the game files in Steam).
-6. Start Goobies through Steam. Goobies Multiplayer is already on.
+6. Start Goobies through Steam. Goobies Multiplayer is on by default; *Multiplayer* is in the main menu.
 
 ## Host and join
 
@@ -44,6 +47,9 @@ in development, things will break, and it exists so we can test together. It is 
 
 ## Reporting a problem
 
+`Report a problem.bat` ships inside the Mod Menu mod folder, `Win64\Mods\mod_menu`, because every Goobies mod needs
+Mod Menu. From the Mod Menu README:
+
 **Easiest way: double-click `Report a problem.bat` in your Mod Menu folder.**
 
 Every Goobies mod needs Mod Menu, so the report tool comes with it. It is in your Goobies folder under `Shooter\Binaries\Win64\Mods\mod_menu\` (in Steam: right-click Goobies > **Manage** > **Browse local files**; if you see `Goobies_DX11` or `Goobies_Vulkan`, open the one you play).
@@ -51,15 +57,11 @@ Every Goobies mod needs Mod Menu, so the report tool comes with it. It is in you
 1. Double-click `Report a problem.bat`. It works without a window, so give it a few seconds: it reports on the game copy it sits in, saves `Goobies_crash_report_<date>.zip` in your Downloads folder, opens the crash-report page in your browser and tells you in a small popup where the zip is. If Windows warns about the file, choose **More info > Run anyway**.
 2. Fill in the form on that page and drag the zip into it.
 
-In this build the tool is `Win64\Mods\mod_menu\Report a problem.bat`. This build has no automatic upload: nothing is
-sent unless you attach the zip yourself.
-
 ## Uninstall
 
-Delete `Win64\Mods\GoobiesMP`, `Win64\Mods\GoobiesMPNative` and `Win64\Mods\GoobiesMPAuthority` (all mods: also
-`Mods\mod_menu`, `Mods\MenuOptions`, `UE4SS.dll`, `dwmapi.dll`, `UE4SS-settings.ini`), then remove the blocker as above.
-Your save is not changed.
+Delete `Win64\Mods\GoobiesMP`, `Win64\Mods\GoobiesMPNative` and `Win64\Mods\GoobiesMPAuthority`, then remove the
+blocker as above. Mod Menu stays for your other mods. Your save is not changed.
 
 ## License
 
-See `LICENSE`. UE4SS is MIT-licensed (`Mods\mod_menu\ThirdParty\UE4SS-LICENSE.txt`).
+See `LICENSE`.

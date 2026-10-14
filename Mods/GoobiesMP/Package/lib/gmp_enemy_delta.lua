@@ -365,9 +365,13 @@ end
 ------------------------------------------------------------------ client
 local Client = {}; Client.__index = Client; D.Client = Client
 local position   -- defined below (the drawn path); Motion uses it for corrections
+-- Test 15 rejoin stall (Coder B): life events are applied at most LIFE_EVENTS_PER_TICK per tick (between two Views);
+-- the rest wait in arrival order and View applies them, so a crowded rejoin fills over several ticks.
+D.LIFE_EVENTS_PER_TICK = 600
 function Client.new()
     return setmetatable({ epoch = 0, enemies = {}, retired = {}, offset = nil, interval = 0.1, jitter = 0, lastArrival = nil,
-        revision = 0, refused = 0, window = { start = nil, motions = 0 }, rxHz = 0, bySlot = {} }, Client)
+        revision = 0, refused = 0, window = { start = nil, motions = 0 }, rxHz = 0, bySlot = {},
+        lifeQueue = {}, lifeBudget = D.LIFE_EVENTS_PER_TICK }, Client)
 end
 local function lifetime(id) return type(id) == 'string' and #id <= 32 and id:match('^%d+:%d+$') ~= nil end
 local function hpOf(s)
@@ -396,7 +400,32 @@ function Client:Life(f, now)
             return self:_refuse()
         end
     end
-    if not self:_epoch(f.epoch) then return self:_refuse() end
+    -- the epoch is checked against the newest one received (queued frames included); applied in order later
+    local newest = self.lifeQueueEpoch or self.epoch
+    if math.type(f.epoch) ~= 'integer' or f.epoch < 1 or f.epoch > 2147483647 or f.epoch < newest then return self:_refuse() end
+    local queue = self.lifeQueue
+    if #queue == 0 and #f.events <= self.lifeBudget then
+        self.lifeBudget = self.lifeBudget - #f.events
+        self:_applyLife(f, now)
+        return true
+    end
+    queue[#queue + 1] = { f = f, now = now }
+    self.lifeQueueEpoch = math.max(newest, f.epoch)
+    return true
+end
+-- Applies the queued life frames that fit this tick's budget (in order), then opens the next tick's budget.
+function Client:_drainLife()
+    local queue = self.lifeQueue
+    while #queue > 0 and #queue[1].f.events <= self.lifeBudget do
+        local item = table.remove(queue, 1)
+        self.lifeBudget = self.lifeBudget - #item.f.events
+        self:_applyLife(item.f, item.now)
+    end
+    if #queue == 0 then self.lifeQueueEpoch = nil end
+    self.lifeBudget = D.LIFE_EVENTS_PER_TICK
+end
+function Client:_applyLife(f, now)
+    self:_epoch(f.epoch)
     for _, e in ipairs(f.events) do
         local enemy = self.enemies[e.id]
         if e.kind == 'd' then
@@ -417,7 +446,6 @@ function Client:Life(f, now)
             enemy.hp = hpOf(e.hp)
         end
     end
-    return true
 end
 function Client:Motion(f, now)
     if type(f) ~= 'table' or math.type(f.t) ~= 'integer' or f.t < 0 then return self:_refuse() end
@@ -610,11 +638,12 @@ position = function(enemy, rt, players)
 end
 -- players: the positions the enemies may chase ({x, y} list; the newest is kept for the prediction).
 function Client:View(now, players)
+    self:_drainLife()   -- test 15 (Coder B): the queued life frames of a burst, within this tick's budget
     if type(players) == 'table' then self.players = players end
     if D.PRESENT_LEAD then self:_leadStep(now) end   -- test 15 (Coder C)
     local rt = self.offset and (now - self.offset - self:RenderDelay()) or nil   -- test 15 (Coder C): drawn ahead
     -- Test 14 (about 3850 live host enemies: 50 ms a tick): one row table per enemy, reused every view (consumers
-    -- read it during the tick and copy what they keep); the id order is sorted only when the set of enemies changed.
+    -- read it during the tick and copy what they keep); the order changes only when the set of enemies changed.
     local drop = {}
     local order, set = self.viewOrder, self.viewSet
     local n, changed = 0, order == nil
@@ -632,11 +661,16 @@ function Client:View(now, players)
         self.enemies[id] = nil; self.retired[id] = true
     end
     if changed or n ~= #order then
-        order, set = {}, {}
-        for id, e in pairs(self.enemies) do
-            if not (e.dead and now - e.deadAt > D.DEAD_KEEP) then order[#order + 1] = id; set[id] = true end
+        -- Coder B (test 15 rejoin): a burst fills over several ticks, so the order is kept and only extended: the ids
+        -- still present keep their place, the new ones are appended in id order (no full sort of every id each tick)
+        local kept, keptSet, fresh = {}, {}, {}
+        for _, id in ipairs(order or {}) do
+            if self.enemies[id] then kept[#kept + 1] = id; keptSet[id] = true end
         end
-        table.sort(order)
+        for id in pairs(self.enemies) do if not keptSet[id] then fresh[#fresh + 1] = id end end
+        table.sort(fresh)
+        for _, id in ipairs(fresh) do kept[#kept + 1] = id; keptSet[id] = true end
+        order, set = kept, keptSet
         self.viewOrder, self.viewSet = order, set
     end
     local rows = {}
@@ -658,7 +692,9 @@ function Client:Stats()
     local n, alive = 0, 0
     for _, e in pairs(self.enemies) do n = n + 1; if not e.dead then alive = alive + 1 end end
     -- test 15 (Coder C): delayMs is the delay really drawn behind the newest sample (negative = drawn ahead)
-    return { rxHz = self.rxHz, delayMs = math.floor(self:RenderDelay() * 1000 + 0.5), enemies = n, alive = alive, refused = self.refused,
+    local queued = 0   -- Coder B: life events waiting for a tick
+    for _, item in ipairs(self.lifeQueue) do queued = queued + #item.f.events end
+    return { rxHz = self.rxHz, delayMs = math.floor(self:RenderDelay() * 1000 + 0.5), enemies = n, alive = alive, refused = self.refused, queued = queued,
         unknownRows = self.unknownRows or 0, corrCm = self.corrCm or 0, snaps = self.snaps or 0 }
 end
 

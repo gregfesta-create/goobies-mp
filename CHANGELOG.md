@@ -6,6 +6,17 @@ Versions are set in `mod_menu.ini` and `Scripts/gmp_config.lua`. Test builds are
 
 - Development in progress.
 
+## 1.0.0-test.2 (2026-10-14)
+
+Second friend test build (tag `v1.0.0-test.2`, a GitHub pre-release); the same multiplayer as 1.0.0-test.1, packaged
+one mod per repository.
+
+- The zip now holds only Goobies Multiplayer (with its two helper mods). It requires Mod Menu 1.1.0-test.1
+  or newer (its own zip from the goobies-mod-menu repository); install both, in any order, into the same
+  `Shooter\Binaries\Win64` folder. The two zips share no files. Menu Options is optional.
+- Goobies Multiplayer is switched on by default: Mod Menu starts it on the first launch after install.
+- The zip no longer replaces Mod Menu's files (`Mods\mods.txt`, `Configs\ModList.ini`, the UE4SS loader).
+
 ## 1.0.0-test.1 (2026-10-14)
 
 First friend test build (tag `v1.0.0-test.1`, a GitHub pre-release). It is a test version, not the final release.

@@ -1,8 +1,0 @@
-UE4SS (RE-UE4SS), MIT License (UE4SS-LICENSE.txt next to this file).
-Project: https://github.com/UE4SS-RE/RE-UE4SS
-UE4SS.dll: experimental release UE4SS_v3.0.1-1164-g5e627997 (commit 5e627997bf265ae6fc89d23357543d8c8ac05a6f),
-  sha256 87b494191b7bc9bcfd938f54190c09e9aaa01dc354f6927ba661b0a18bad13ee.
-dwmapi.dll (proxy loader) and UE4SS-settings.ini: the files tested with Mod Menu 1.0.1 (UE4SS v3.0.1 Beta #0, commit d935b5b),
-  sha256 ce596412befa68c30b7f88f65beb77d9bdad55e9b96a276a5a9cf690c63f24bb and
-  a0c3eb21731339cbac87299206252365d83c187575d9bbeb0ef17c8bc78f6d72.
-These bytes are identical to the runtime used in the Goobies MP playtests.

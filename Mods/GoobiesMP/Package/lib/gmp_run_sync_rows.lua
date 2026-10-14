@@ -133,6 +133,10 @@ R.NATIVE_CAP_MIN = 64        -- a full pool never lowers the cap below this
 R.NATIVE_CAP_MARGIN = 32     -- headroom kept below a pool found full by displacement (records the game has not recycled)
 R.POOL_FULL_SPAWNS = 256     -- the same slot displaced twice within this many spawns = a full pool, not a reuse
 R.MAP_REFRESH_SHARE = 0.1    -- the native collision-map refresh takes at most this share of the frame time
+-- Test 15 stutters (Coder C): 56 of the 57 client ROWS spikes of 60-415 ms were one native refresh (UpdateInstances(0))
+-- taking that long. A refresh slower than MAP_REFRESH_SLOW is logged (at most once per SLOW_LOG_SECONDS, all counted:
+-- Status().mapRefreshSlow) with the gap since the previous one, the native counts and the Lua heap before/after.
+R.MAP_REFRESH_SLOW, R.SLOW_LOG_SECONDS = 0.05, 5
 R.RANK_SECONDS = 0.5         -- the nearest-first ranking is rebuilt at most this often (new ids are appended)
 R.PRESENT_NEAR = 64          -- with a focus, the nearest rows are redrawn first every presentation pass
 -- native update refusals that mean the row's record is no longer its own: the row is re-seeded as drawn only
@@ -199,9 +203,14 @@ function R:_applyFramed(ctx, snapshot)
         -- test 14: an expensive refresh (UpdateInstances over thousands of rows) runs less often, at most
         -- MAP_REFRESH_SHARE of the frame time
         local c0 = self.clock()
-        self:_refreshMap()
+        local kb0 = collectgarbage('count')   -- test 15 (Coder C): a drop across the call = a Lua collection inside it
+        local alive, amount, nativeUs, records = self:_refreshMap()
         local cost = self.clock() - c0
         self.refreshNotBefore = cost > 0 and c0 + cost / R.MAP_REFRESH_SHARE or nil
+        if cost >= R.MAP_REFRESH_SLOW then
+            self:_slowRefresh(c0, cost, kb0, collectgarbage('count'), alive, amount, nativeUs, records)
+        end
+        self.lastRefreshAt = c0
     end
     local t4 = os.clock()
     local w = self.window
@@ -212,9 +221,27 @@ function R:_applyFramed(ctx, snapshot)
     self.presentMs = 0
     return ok, why
 end
+-- test 15 (Coder C): a slow native refresh, logged with what may explain it (rate limited, always counted)
+-- Test 15 stutters (Coder B): the new slice1 times the one dispatch inside the native call (nativeUs) and reports the
+-- record count; cause=game when UpdateInstances itself took at least half the cost, cause=around when the time went
+-- around the call (a Lua collection, marshalling), cause=unknown with an older DLL (no timing).
+function R:_slowRefresh(at, cost, kb0, kb1, alive, amount, nativeUs, records)
+    self.mapRefreshSlow = (self.mapRefreshSlow or 0) + 1
+    local timed = math.type(nativeUs) == 'integer' and nativeUs >= 0
+    local cause = not timed and 'unknown' or (nativeUs / 1e6 >= cost * 0.5 and 'game' or 'around')
+    if cause == 'game' then self.mapRefreshSlowGame = (self.mapRefreshSlowGame or 0) + 1
+    elseif cause == 'around' then self.mapRefreshSlowAround = (self.mapRefreshSlowAround or 0) + 1 end
+    if self.slowLoggedAt and at - self.slowLoggedAt < R.SLOW_LOG_SECONDS then return end
+    self.slowLoggedAt = at
+    self.log(string.format('ROWS slow map refresh ms=%.0f since_ms=%s alive=%s amount=%s lua_kb=%.0f->%.0f slow_total=%d native_ms=%s records=%s cause=%s',
+        cost * 1000, self.lastRefreshAt and string.format('%.0f', (at - self.lastRefreshAt) * 1000) or '-',
+        tostring(alive), tostring(amount), kb0, kb1, self.mapRefreshSlow,
+        timed and string.format('%.1f', nativeUs / 1000) or '-', (timed and math.type(records) == 'integer' and records >= 0) and tostring(records) or '-',
+        cause))
+end
 function R:_refreshMap()
-    local called, ok, why = pcall(self.api.mapRefresh, self.ctx.generation)
-    if called and ok == true then self.mapRefreshed = self.mapRefreshed + 1; return end
+    local called, ok, why, alive, amount, nativeUs, records = pcall(self.api.mapRefresh, self.ctx.generation)
+    if called and ok == true then self.mapRefreshed = self.mapRefreshed + 1; return alive, amount, nativeUs, records end
     self.mapRefreshFailed = self.mapRefreshFailed + 1
     local reason = tostring(called and why or ok):sub(1, 200)
     if not self.mapRefreshLogged[reason] then
@@ -765,7 +792,9 @@ function R:Status()
         refreshed = self.counts.refreshed, pending = self.pending or 0, capped = self.counts.capped,
         refused = self.counts.refused, skipped = self.counts.skipped, displaced = self.counts.displaced,
         recovered = self.counts.recovered, deathfx = self.counts.deathfx, deathfxRefused = self.counts.deathfxRefused,
-        mapRefreshed = self.mapRefreshed, mapRefreshFailed = self.mapRefreshFailed, reseeded = self.counts.reseeded,
+        mapRefreshed = self.mapRefreshed, mapRefreshFailed = self.mapRefreshFailed, mapRefreshSlow = self.mapRefreshSlow or 0,
+        mapRefreshSlowGame = self.mapRefreshSlowGame or 0, mapRefreshSlowAround = self.mapRefreshSlowAround or 0,   -- Coder B   -- test 15 (Coder C)
+        reseeded = self.counts.reseeded,
         poolFull = self.counts.poolFull, nativeCap = self.nativeCap, fill = self.fill }
 end
 

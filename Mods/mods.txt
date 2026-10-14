@@ -1,3 +1,0 @@
-GoobiesMPNative : 1
-GoobiesMPAuthority : 1
-mod_menu : 1
