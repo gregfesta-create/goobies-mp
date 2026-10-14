@@ -1,0 +1,7 @@
+# Never commit logs, dumps or private files
+*.log
+*.dmp
+report_webhook.txt
+private/
+.env
+.env.*
