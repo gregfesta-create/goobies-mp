@@ -394,11 +394,11 @@ function W:UpdatePauseMenu(state,role,request)
         font.FontObject=native.FontObject;font.TypefaceFontName=native.TypefaceFontName
         font.Size=native.Size;font.LetterSpacing=native.LetterSpacing or 0
         -- Native WBP_Button owns a ScaleBox. Match its allocated row instead
-        -- of applying an extra text transform inside that scaling hierarchy.
-        for _,control in ipairs({button,resume,settings,quit}) do
-            local label=control.t_text
+        -- of applying an extra text transform inside that scaling hierarchy (our own label only).
+        do
+            local label=button.t_text
             label:SetRenderScale({X=1,Y=1})
-            control.WidgetTree.RootWidget:SetStretch(0)
+            button.WidgetTree.RootWidget:SetStretch(0)
             label:SetJustification(1)
             local slot=label.Slot
             if valid(slot) then
@@ -411,12 +411,14 @@ function W:UpdatePauseMenu(state,role,request)
                 end
             end
         end
+        -- test.3: the game's own rows stay exactly as the game built them. Removing, re-parenting or restyling them
+        -- (test.2) rebuilt the native WBP_Buttons: a button that shows its label in rich text (T_Text_Rich, default
+        -- "Bingos") lost it, and a row container holding more than one button lost the others. Our row is added
+        -- beside them; nothing native is moved, hidden, shown or relabelled.
+        self:_dumpPauseMenu(hud)
         local class=parent:GetFullName():match('^(%S+)')
         if class=='VerticalBox' then
-            r:RemoveFromParent();s:RemoveFromParent();q:RemoveFromParent()
-            for _,child in ipairs({button,r,s,q}) do
-                local slot=parent:AddChildToVerticalBox(child);slot:SetHorizontalAlignment(2)
-            end
+            local slot=parent:AddChildToVerticalBox(button);slot:SetHorizontalAlignment(2)
         elseif class=='CanvasPanel' then
             local position=r.Slot:GetPosition();local size=r.Slot:GetSize()
             local nextPosition=s.Slot:GetPosition();local gap=nextPosition.Y-position.Y
@@ -427,11 +429,19 @@ function W:UpdatePauseMenu(state,role,request)
             slot:SetAnchors({Minimum={X=anchors.Minimum.X,Y=anchors.Minimum.Y},Maximum={X=anchors.Maximum.X,Y=anchors.Maximum.Y}})
             slot:SetAlignment({X=alignment.X,Y=alignment.Y})
         else button:RemoveFromParent();return false end
-        menu={hud=hud,button=button,name=button:GetFullName(),parent=parent,
-            controls={button,resume,settings,quit},branches={r,s,q},reference=r};self.pauseMenu=menu
+        menu={hud=hud,button=button,name=button:GetFullName(),parent=parent,reference=r};self.pauseMenu=menu
         if self.options.trace then self.options.trace('Pause menu attached parent='..parent:GetFullName()) end
     end
     self:MatchPauseRows(menu)
+    -- test.3: for the host the extra row is the game's own Resume (host Esc pauses everyone and the host's Resume
+    -- releases the shared pause: InstallResumeHook), so it is collapsed; a client keeps it (its Resume only closes
+    -- its own menu) to pause or unpause everyone where the host allows it.
+    local shown=role~='host'
+    if menu.shown~=shown then
+        local row=menu.rows and menu.rows[1]
+        if valid(row) then row:SetVisibility(shown and 0 or 1);menu.button:SetVisibility(0);menu.shown=shown
+        elseif valid(menu.button) then menu.button:SetVisibility(shown and 0 or 1);menu.shown=shown end
+    end
     local enabled=not state.locked and (role=='host' or not state.hostOnly)
     menu.button:SetIsEnabled(enabled)
     menu.button:SetToolTipText(self.G.FText(state.locked and 'Host handover in progress' or
@@ -454,6 +464,7 @@ function W:UpdatePauseMenu(state,role,request)
     end
     return true
 end
+-- Our row only, sized like the game's Resume row (its first layout gives the size); the native rows are not touched.
 function W:MatchPauseRows(menu)
     -- Slate slot Center is 2; TextJustification Center is 1. Mixing these
     -- enums left-aligns different text widths in otherwise identical rows.
@@ -462,47 +473,54 @@ function W:MatchPauseRows(menu)
     -- Wait for Slate's first layout so the reference is the visible native row.
     local reference=menu.reference:GetDesiredSize()
     local function positive(v) return type(v)=='number' and v>0 and v<math.huge end
-    if not positive(reference.Y) then return end
-    local width=reference.X
-    for _,control in ipairs(menu.controls) do
-        local size=control:GetDesiredSize()
-        if positive(size.X) then width=math.max(width,size.X) end
-    end
-    if not positive(width) then return end
+    if not positive(reference.Y) or not positive(reference.X) then return end
     local cls=self.G.StaticFindObject('/Script/UMG.SizeBox')
     assert(valid(cls),'Pause row SizeBox unavailable')
-    local rows={}
-    -- Construct all wrappers before removing working menu controls.
-    for i=1,#menu.controls do
-        local row=self.G.StaticConstructObject(cls,menu.hud.WidgetTree)
-        assert(valid(row),'Pause row construction failed')
-        row:SetWidthOverride(width);row:SetHeightOverride(reference.Y);rows[i]=row
-    end
-    menu.button:RemoveFromParent()
-    for _,control in ipairs(menu.controls) do control:RemoveFromParent() end
-    -- Remove the former native wrapper branches from this menu only.
-    for _,branch in ipairs(menu.branches) do branch:RemoveFromParent() end
-    for i,control in ipairs(menu.controls) do
-        local row=rows[i];row:SetContent(control)
-        control.Slot:SetHorizontalAlignment(0);control.Slot:SetVerticalAlignment(0)
-        local root=control.WidgetTree.RootWidget
-        root:SetStretch(0) -- Native font owns size; avoid a second ScaleBox scaling pass.
-        local content=root:GetChildAt(0)
-        content.Slot:SetHorizontalAlignment(2);content.Slot:SetVerticalAlignment(2)
-        if valid(control.b_button) then
-            local body=control.b_button:GetChildAt(0)
-            if valid(body) and valid(body.Slot) then
-                body.Slot:SetPadding({Left=0,Top=0,Right=0,Bottom=0})
-            end
+    local row=self.G.StaticConstructObject(cls,menu.hud.WidgetTree)
+    assert(valid(row),'Pause row construction failed')
+    row:SetWidthOverride(reference.X);row:SetHeightOverride(reference.Y)
+    local button=menu.button
+    button:RemoveFromParent();row:SetContent(button)
+    button.Slot:SetHorizontalAlignment(0);button.Slot:SetVerticalAlignment(0)
+    local root=button.WidgetTree.RootWidget
+    root:SetStretch(0) -- Native font owns size; avoid a second ScaleBox scaling pass.
+    local content=root:GetChildAt(0)
+    if valid(content) and valid(content.Slot) then content.Slot:SetHorizontalAlignment(2);content.Slot:SetVerticalAlignment(2) end
+    local text=button.t_text
+    text:SetRenderScale({X=1,Y=1});text:SetJustification(1)
+    text.Slot:SetHorizontalAlignment(2);text.Slot:SetVerticalAlignment(2)
+    text.Slot:SetPadding({Left=0,Top=0,Right=0,Bottom=0})
+    local slot=menu.parent:AddChildToVerticalBox(row);slot:SetHorizontalAlignment(2)
+    menu.rowsMatched=true;menu.rows={row};menu.shown=nil
+    if self.options.trace then self.options.trace('Pause row matched width='..reference.X..' height='..reference.Y) end
+end
+-- test.3: one read-only dump of the game's own Esc menu per HUD, before anything is added (PAUSEMENUTREE lines:
+-- name [class] vis=<ESlateVisibility> and the text of text widgets), so a run shows the vanilla rows.
+W.PAUSE_DUMP_NODES = 160
+function W:_dumpPauseMenu(hud)
+    local trace=self.options.trace
+    if not trace then return end
+    local key=hud:GetFullName()
+    if self.pauseDumpHud==key then return end
+    self.pauseDumpHud=key
+    local count=0
+    local function walk(node,depth)
+        if not valid(node) or depth>14 or count>=W.PAUSE_DUMP_NODES then return end
+        count=count+1
+        local full=node:GetFullName();local class=full:match('^(%S+)') or '?';local name=full:match('([^%.:]+)$') or full
+        local okVis,vis=pcall(function() return node:GetVisibility() end)
+        local text=''
+        if class=='TextBlock' or class=='RichTextBlock' then
+            local okText,value=pcall(function() return node:GetText():ToString() end)
+            if okText and type(value)=='string' then text=' text="'..value:gsub('[%c"]',' '):sub(1,60)..'"' end
         end
-        local text=control.t_text
-        text:SetRenderScale({X=1,Y=1});text:SetJustification(1)
-        text.Slot:SetHorizontalAlignment(2);text.Slot:SetVerticalAlignment(2)
-        text.Slot:SetPadding({Left=0,Top=0,Right=0,Bottom=0})
-        local slot=menu.parent:AddChildToVerticalBox(row);slot:SetHorizontalAlignment(2)
+        trace('PAUSEMENUTREE '..string.rep(' ',depth)..name..' ['..class..'] vis='..tostring(okVis and vis or '?')..text)
+        local okN,n=pcall(function() return node:GetChildrenCount() end)
+        if okN and type(n)=='number' then for i=0,math.min(n,32)-1 do walk(node:GetChildAt(i),depth+1) end end
+        pcall(function() if node.WidgetTree and valid(node.WidgetTree.RootWidget) then walk(node.WidgetTree.RootWidget,depth+1) end end)
     end
-    menu.rowsMatched=true;menu.rows=rows
-    if self.options.trace then self.options.trace('Pause rows matched width='..width..' height='..reference.Y) end
+    local ok,why=pcall(walk,hud.pausemenu_overlay,0)
+    if not ok then trace('PAUSEMENUTREE unavailable: '..tostring(why)) end
 end
 function W:LightenPauseBackground(hud)
     local key=hud:GetFullName()

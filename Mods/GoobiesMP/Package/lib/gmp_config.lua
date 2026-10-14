@@ -10,7 +10,7 @@ local Mode = require("gmp_mode_policy")   -- D47: dev | friend | production, one
 --                    achievement flag (D16, always blocked), and the world-entry messages are reserved (gmp_messages.lua).
 --   gameVer          the Goobies game build; "" while no clean source for it exists (a check runs only when BOTH sides know it).
 Config.PROTOCOL_VERSION = 9
-Config.MOD_VERSION = "1.0.0-test.2"
+Config.MOD_VERSION = "1.0.0-test.3"
 Config.MOD_NAME = "GoobiesMP"         -- the name a host advertises as the required mod
 -- lobby limits (host validates everything; clients only request)
 Config.LOBBY = { MAX_CHAT_BYTES = 200, CHAT_HISTORY = 50, CHAT_BURST = 5, CHAT_WINDOW = 3.0, MAX_ARTIFACTS = 8, MAX_TOKEN_BYTES = 32 }

@@ -842,7 +842,8 @@ end
 -- lobby starts with guard-ready OR the D16 lease / D36 legacy proxy (which keeps priority). Without either, friend
 -- mode warns and allows (the user's stance, D57); dev and production stay refused. The guard is ready only when it
 -- says so without contradiction (ready, reason 'ready', proven, not late).
-App.ACHIEVEMENT_WARNING='Achievement protection could not be confirmed; achievements may unlock while modded'
+-- Coder C (2026-10-14): the same words as Mod Menu's main-menu notice (Mod_Menu/Scripts/mm_guard.lua Guard.NOTICE).
+App.ACHIEVEMENT_WARNING='Achievement protection not confirmed - achievements may unlock'
 function App:_modMenuGuardReady()
     local G=self.bridge and self.bridge.G
     local okFn,fn=pcall(function() return G.MM_AchievementGuard end)   -- the package env reaches Mod Menu's globals by __index

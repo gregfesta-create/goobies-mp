@@ -1,11 +1,12 @@
 -- Cross-PC 1.5 / D47: the friend-build config check (research/CROSS_PC_GAPS.md). Pure Lua.
--- A friend build runs MODE=friend (gmp_mode_policy.lua): a real Steam lobby with Steam auth, the playtest gameplay and
--- the D36 legacy achievement proxy, and no dev keys. The App logs the result at boot in MODE=friend.
+-- A friend build runs MODE=friend (gmp_mode_policy.lua): a real Steam lobby with Steam auth, the playtest gameplay,
+-- Mod Menu's achievement guard (D57), and no dev keys. The App logs the result at boot in MODE=friend.
 local F = {}
 -- Every key a friend build needs, with its value.
 F.KEYS = {
     { 'MODE', 'friend' }, { 'AUTH_MODE', 'steam' }, { 'STEAM_LOBBY', '1' }, { 'LOBBY_UI', '1' },
-    { 'DEV_LEGACY_ACHIEVEMENT_PROXY', '1' },
+    -- D57 (Coder C, 2026-10-14): no DEV_LEGACY_ACHIEVEMENT_PROXY: Mod Menu's guard (Mods/ModMenuGuard) blocks
+    -- achievements from inside Win64, so a friend moves no proxy; the key stays accepted where a proxy is installed.
     -- the playtest gameplay set (tools/qa_four/prepare.py R1_FLAGS without the dev scaffolding) and presence
     { 'ISLAND_HANDOFF', '1' }, { 'AUTHORITY_PREP', '1' }, { 'RUN_SYNC_ENEMIES', '1' }, { 'CLIENT_ATTACKS', '1' },
     { 'HOST_CREDITED_STATS', '1' }, { 'HOST_ENEMY_CAPTURE', '1' }, { 'CLIENT_ENEMY_ROWS', '1' }, { 'SHARED_PAUSE', '1' },

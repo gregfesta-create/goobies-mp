@@ -98,8 +98,13 @@ function D:Tick(now)
     end
     if state.paused then
         local players=o.role()=='host' and session.roster:Snapshot() or session:Display()
-        local owner='Player'
-        for _,player in ipairs(players) do if player.key==state.owner then owner=player.name or ('Player '..player.slot);break end end
+        -- Name the roster slot and the host, like the Esc role label ("Player 1 - Host"): Steam players have no
+        -- persona name yet (every one is "Player"), so a name alone could not tell who paused.
+        local owner='a player'
+        for _,player in ipairs(players) do if player.key==state.owner then
+            owner=type(player.slot)=='number' and ('Player '..player.slot..(player.role=='host' and ' (host)' or '')) or (player.name or owner)
+            break
+        end end
         o.world:SetPauseNotice('Paused by '..owner)
     elseif (o.role()=='client' and state.hostOnly and self.clientMenuOpen)
         or (self.deniedUntil and now<self.deniedUntil) then

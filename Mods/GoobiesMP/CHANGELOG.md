@@ -1,14 +1,25 @@
 # Goobies Multiplayer changelog
 
-Versions are set in `mod_menu.ini` and `Scripts/gmp_config.lua`. Test builds are published as GitHub pre-releases.
+Versions are set in `mod_menu.ini` and `Scripts/gmp_config.lua`. Test builds are published as GitHub releases marked Latest; `-test.N` in the version marks a test build.
 
 ## Unreleased
 
 - Development in progress.
 
+## 1.0.0-test.3 (2026-10-14)
+
+Third friend test build (tag `v1.0.0-test.3`). It requires Mod Menu (the README names the version); install both, in
+any order, into the same `Shooter\Binaries\Win64` folder.
+
+- The settings now ship as Goobies Multiplayer's own defaults (`Mods\GoobiesMP\Defaults\Configs\GoobiesMP.ini`).
+  Mod Menu creates `Configs\GoobiesMP.ini` from them on the first start and keeps your own values when an update adds
+  new settings. The zip no longer contains `Configs\GoobiesMP.ini`, so extracting it again never resets your settings.
+- The GoobiesMPAuthority helper is hidden in the Mods menu, like GoobiesMPNative (it showed up as "unmanaged" with
+  version "?").
+
 ## 1.0.0-test.2 (2026-10-14)
 
-Second friend test build (tag `v1.0.0-test.2`, a GitHub pre-release); the same multiplayer as 1.0.0-test.1, packaged
+Second friend test build (tag `v1.0.0-test.2`); the same multiplayer as 1.0.0-test.1, packaged
 one mod per repository.
 
 - The zip now holds only Goobies Multiplayer (with its two helper mods). It requires Mod Menu 1.1.0-test.1
