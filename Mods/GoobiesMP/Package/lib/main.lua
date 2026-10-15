@@ -23,6 +23,12 @@ local pkgOk = pcall(function()
     local entry = scriptDir .. "/?.lua"
     if not (";" .. package.path .. ";"):find(";" .. entry:gsub("%p", "%%%0") .. ";") then package.path = entry .. ";" .. package.path end
 end)
+-- Coder D (user report: no configs showing up for Goobies Multiplayer): GoobiesMP's settings gear in Mod Menu
+-- (gmp_settings_page.lua). Registered first, so the page is there even if the session below fails to start.
+if ctx and type(ctx.registerSettings) == "function" then
+    local okPage, whyPage = pcall(function() ctx.registerSettings(require("gmp_settings_page").Provider(ctx)) end)
+    if not okPage then (G.print or print)("[GoobiesMP] settings page unavailable: " .. tostring(whyPage)) end
+end
 
 local runtime
 local okLoad, err = pcall(function()

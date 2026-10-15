@@ -47,13 +47,24 @@ function B.Filter(list, friendsOnly)
     for _, e in ipairs(list) do if e.friend then out[#out + 1] = e end end
     return out
 end
+-- t3 friend reports (Coder A): a host on another Goobies MP version (its published gmp_ver) cannot be joined; the
+-- dropdown says so before anyone tries. A host that publishes no version is not blocked (the handshake still checks).
+function B.OtherVersion(e, myVersion)
+    return type(myVersion) == 'string' and myVersion ~= '' and type(e.ver) == 'string' and e.ver ~= '' and e.ver ~= myVersion
+end
+function B.Refusal(e, myVersion)
+    if B.OtherVersion(e, myVersion) then
+        return string.format('The host has Goobies MP %s; you have %s. Both players need the same version.', e.ver, myVersion)
+    end
+end
 -- A full lobby cannot be joined; an in-progress one only by a returning player (the host decides, D52).
-function B.Joinable(e) return e.members < e.max end
-function B.Label(e, myHash)
+function B.Joinable(e, myVersion) return e.members < e.max and not B.OtherVersion(e, myVersion) end
+function B.Label(e, myHash, myVersion)
     local parts = { string.format('%s (%d/%d)', e.name, e.members, e.max) }
     if e.members >= e.max then parts[#parts + 1] = 'full' end
     if e.state == 'run' then parts[#parts + 1] = 'in progress' end
-    if e.mods == '' or not myHash then parts[#parts + 1] = 'mods unknown'
+    if B.OtherVersion(e, myVersion) then parts[#parts + 1] = 'different version: host ' .. e.ver
+    elseif e.mods == '' or not myHash then parts[#parts + 1] = 'mods unknown'
     elseif e.mods == myHash then parts[#parts + 1] = 'same mods'
     else parts[#parts + 1] = 'different mods' end
     return table.concat(parts, ' - ')

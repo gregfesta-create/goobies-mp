@@ -89,6 +89,10 @@ end
 function Client.handlers.ISLAND_END(self,f)
     local state=self.islands
     if self.state~='joined' or not state or state.phase=='idle' or (f.epoch~=state.epoch and (not state.pending or f.epoch~=state.pending.epoch)) then return end
+    -- Coder C (host death, 2026-10-15): a run already returned to the lobby (LOBBY_RETURN, the host's mirror in the lobby)
+    -- is over, not left: the host closing its world afterwards (its end screen Quit) is never "Host left the run".
+    local mirror=self.mirror
+    if type(mirror)=='table' and mirror.phase=='lobby' then state.phase='idle';state.pending=nil;state.announced=nil;return end
     state.phase='host_left';state.pending=nil;state.announced=nil
     self.travelCheck=nil;self.travelWaiting=nil;self.loadingWaiting=nil
 end

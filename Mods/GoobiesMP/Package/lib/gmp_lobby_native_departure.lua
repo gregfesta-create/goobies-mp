@@ -46,7 +46,13 @@ function D:_attach(hud)
     local font=original.t_text.Font;local target=button.t_text.Font
     target.FontObject=font.FontObject;target.TypefaceFontName=font.TypefaceFontName
     target.Size=font.Size;target.LetterSpacing=font.LetterSpacing or 0
-    button.t_text:SetText(self.G.FText('End Run'));button.t_text:SetJustification(1)
+    -- test.3: the label goes through the button's own UpdateButtonText (ButtonText + whichever label it shows): a
+    -- widget rebuild (PreConstruct) re-applies ButtonText, and a fresh WBP_Button's default is "Bingos" (test.2).
+    local label=button.t_text
+    if type(button.UpdateButtonText)=='function' or type(button.UpdateButtonText)=='userdata' then
+        button:UpdateButtonText(self.G.FText('End Run'))
+    else label:SetText(self.G.FText('End Run')) end
+    label:SetJustification(1)
     self.owned={hud=hud,name=hud:GetFullName(),parent=parent,original=replaced,button=button,buttonName=button:GetFullName()}
     parent:SetContent(button)
     if not self.hooked then

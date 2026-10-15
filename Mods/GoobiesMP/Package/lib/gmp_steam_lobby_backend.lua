@@ -118,6 +118,13 @@ function B:Leave()
  self.pending=nil;self.receipt=nil;return true
 end
 function B:LeaveNative() return self:_call('GMP_Lob_Leave') end
+-- t3 friend reports (Coder A): the host's Cancel closes its lobby (App:_closeSteamLobby tells the players first).
+function B:CloseLobby()
+ if type(self.o.close)~='function' then return false,'close_unavailable' end
+ local ok,accepted,why=pcall(self.o.close)
+ if not ok or accepted~=true then return false,ok and (why or 'close_refused') or 'close_callback_failed' end
+ self.pending=nil;self.receipt=nil;return true
+end
 -- D53: the Host dropdown's Steam lobbies (gmp_lobby_browser.lua), refreshed every LIST_SECONDS while asked for:
 -- GMP_Lob_ListReq(friendsOnly) starts a native refresh, GMP_Lob_List() returns the latest result. Without the
 -- exports the list is empty.
@@ -169,7 +176,9 @@ function B:ListLobbies(friendsOnly)
  local mine=self.o.modHash and self.o.modHash() or nil
  local out,same={},0
  for _,e in ipairs(Browser.Filter(Browser.Sort(Browser.Parse(text)),friendsOnly==true)) do
-  out[#out+1]={id=e.id,label=Browser.Label(e,mine),joinable=Browser.Joinable(e),entry=e}
+  -- t3 friend reports (Coder A): another Goobies MP version is marked and not joinable, with the reason
+  local version=require('gmp_config').MOD_VERSION
+  out[#out+1]={id=e.id,label=Browser.Label(e,mine,version),joinable=Browser.Joinable(e,version),refusal=Browser.Refusal(e,version),entry=e}
   if mine and e.mods==mine then same=same+1 end
  end
  -- at most one line per list request

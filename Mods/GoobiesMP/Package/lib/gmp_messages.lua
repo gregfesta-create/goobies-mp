@@ -132,7 +132,8 @@ Messages.Schema.CHECKPOINT_ACK={dir='C2H',ch='R',fields={F('term','int'),F('sequ
 Messages.Schema.PLAYER_STATE_CHUNK={dir='C2H',ch='R',fields={F('term','int'),F('sequence','int'),
     F('index','int'),F('total','int'),F('size','int'),F('digest','str'),F('data','str')}}
 Messages.Schema.HANDOVER_FORCE_REQ={dir='C2H',ch='R',fields={F('term','int'),F('sequence','int'),F('digest','str')}}
-Messages.Schema.DEPARTURE_CLAIM={dir='C2H',ch='R',fields={F('term','int'),F('revision','int'),F('request','str')}}
+-- D59: answer = true "become the new host", false "no"
+Messages.Schema.DEPARTURE_CLAIM={dir='C2H',ch='R',fields={F('term','int'),F('revision','int'),F('request','str'),F('answer','bool')}}
 Messages.Schema.DEPARTURE_STATE={dir='H2C',ch='R',fields={F('term','int'),F('revision','int'),F('sequence','int'),
     F('digest','str'),F('coordinator','str'),F('eligible','bool'),F('active','bool'),F('paused','bool'),
     F('winner','str'),F('request','str'),F('accepted','bool'),F('reason','str'),F('phase','str')}}

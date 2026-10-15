@@ -268,13 +268,22 @@ function L:_entryTick(now)
     local matches,why=self:_selectionMatches(session,role)
     -- A rejoining client's game selector may show another class than its reclaimed lobby row: apply the row's class
     -- once (the game's own class initialization), then check again on the next tick.
-    if not matches and why=='native_class_changed' and role=='client' and islands.pending.island>1 and not self.rejoinClassApplied then
-        self.rejoinClassApplied=true
+    -- Coder B (test.3 report 1560096438933917776): on ANY island. A relaunched game rejoining a run still on island 1
+    -- never saw START (the host's run phase counts) and was refused native_class_changed forever. The held class is the
+    -- one this player had in the run, so it is applied even where the relaunched selector shows it locked; if it
+    -- cannot be applied, the lobby screen says so and this entry stops (never a silent wait).
+    local rejoining=role=='client' and ((runInProgress and not session.started) or islands.pending.island>1)
+    if not matches and rejoining and (why=='native_class_changed' or why=='native_artifacts_changed') then
         local wanted;for _,row in ipairs(session:LobbyMirror().players or {}) do if row.key==session.identity.key then wanted=row end end
-        local applied,problem=false,'no_row'
-        if wanted and type(self.native.ApplyClass)=='function' then applied,problem=self.native:ApplyClass(wanted.class) end
-        self:_log('rejoin: applied the lobby class '..tostring(wanted and wanted.class)..' to the game selector: '..tostring(applied and 'ok' or problem))
-        return
+        if why=='native_class_changed' and self.rejoinClassApplied~=token then
+            self.rejoinClassApplied=token
+            local applied,problem=false,'no_row'
+            if wanted and type(self.native.ApplyClass)=='function' then applied,problem=self.native:ApplyClass(wanted.class,{held=true}) end
+            self:_log('rejoin: applied the lobby class '..tostring(wanted and wanted.class)..' to the game selector: '..tostring(applied and 'ok' or problem))
+            if applied then return end
+            return self:_rejoinRefused(token,wanted,problem)
+        end
+        return self:_rejoinRefused(token,wanted,why)
     end
     if not matches then self:_once('world entry refused: '..tostring(why));return end
     if not self.entry then
@@ -297,6 +306,21 @@ function L:_entryTick(now)
         if self.entry.failure then self:_once('world entry failed: '..self.entry.failure,'entry_failure') end
         self.entry=nil
     end
+end
+-- Coder B: a rejoin that cannot take the held loadout. The lobby screen names the class and the reason, and this entry
+-- token is closed (no retry loop); the player can leave and join again.
+function L:_rejoinRefused(token,wanted,why)
+    local label=wanted and wanted.class or '?'
+    local ok,catalogue=pcall(self.native.Catalogue,self.native)
+    if ok and type(catalogue)=='table' then
+        for _,entry in ipairs(catalogue.classes or {}) do if wanted and entry.id==wanted.class then label=entry.label end end
+    end
+    local text='Could not rejoin with your class from the run ('..tostring(label)..'): '..tostring(why)
+        ..'. Leave and join again, or choose '..tostring(label)..' in the game first.'
+    self.entered[token]=text
+    self:_log('rejoin refused: '..text)
+    local screen=self.renderer and self.renderer.screen
+    if screen then screen.selectionError=text;screen:Open() end
 end
 function L:Dispose()
     if self.unregisterMenuBack then self.unregisterMenuBack();self.unregisterMenuBack=nil;self.focusMenuBack=nil end

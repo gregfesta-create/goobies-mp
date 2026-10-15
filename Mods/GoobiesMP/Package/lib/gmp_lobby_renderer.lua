@@ -138,7 +138,9 @@ function R:Render(model,activate)
             for _,choice in ipairs(picker.choices) do
                 local row=w:row(list,50,630)
                 w:button(row,(choice.id==picker.selected and '> ' or '')..choice.label,0,2,620,46,function() activate('pick_host',choice.id) end,
-                    choice.joinable and 'Pick this host.' or 'This lobby cannot be joined.',choice.joinable)
+                    choice.joinable and 'Pick this host.' or choice.tooltip or 'This lobby cannot be joined.',
+                    -- t3 friend reports (Coder A): another version stays clickable: the click shows why (Join stays off)
+                    choice.joinable or choice.refusal~=nil)
             end
         elseif model.scope~='local_sockets' then
             w:text(page,'Lobby ID',90,250,650,40,18)

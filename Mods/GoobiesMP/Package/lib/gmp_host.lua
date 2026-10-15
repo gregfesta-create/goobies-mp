@@ -363,6 +363,7 @@ function Host.handlers.JOIN_REQ(self, peer, f)
     end
     local rec, rwhy = self.roster:Join(id, f.name, peer.peerId, self.clock(), { reqColor = f.reqColor, modVer = f.modVer, gameVer = f.gameVer })
     if not rec then return self:_reject(peer, "JOIN_REJECT", rwhy) end
+    self:_placeholderName(rec)
     peer.key = rec.key
     self:_log("join accepted %s slot=%d color=%s", Identity.Mask(rec.key), rec.slot, rec.color)
     self:_send(peer, "JOIN_ACCEPT", { key = rec.key, slot = rec.slot, color = rec.color, token = rec.token, rosterRev = self.roster.rev })
@@ -416,6 +417,7 @@ function Host:_admitWaiting()
     for _, w in ipairs(self:WaitingPlayers()) do
         local peer, wait = w.peer, w.peer.waiting
         local rec, why = self.roster:Join(wait.id, wait.name, peer.peerId, self.clock(), wait.extra)
+        if rec then self:_placeholderName(rec) end
         if not rec then
             if why == "session_full" then return end
             peer.waiting = nil
@@ -599,7 +601,9 @@ function Host:_pollAuth()
                 -- Steam reports an already authenticated peer is gone / cancelled its ticket: that is a disconnect, not a kick
                 local p = self:_peerAuthenticatedAs(ev.key)
                 if not p then for _,candidate in pairs(self.peers)do if candidate.auth.state=='mutual' and candidate.auth.sessionKey==ev.key then p=candidate;break end end end
-                if p then self:_dropPeer(p, "auth_revoked") end
+                -- Coder B (friend test 1.0.0-test.3): name Steam's reason (ticket_canceled = the client closed its session,
+                -- e.g. D52 quit to the menu); still a drop, so the slot stays held
+                if p then self:_dropPeer(p, "auth_revoked:" .. Auth.WireReason(ev.reason)) end
             end
         end
     end
@@ -1234,7 +1238,43 @@ function Host:BroadcastPresence()
 end
 
 ------------------------------------------------------------------ periodic work
+-- Steam persona names (gmp_player_names.lua): with a resolver (a Steam session; gmp_app.lua App.SteamNameResolver)
+-- the host names every player by its authenticated key, never by the name the client claims: "Player <slot>" until
+-- the native name arrives, then the sanitized persona name, shared through ROSTER (all players see the same names).
+-- Unresolved names are asked every PENDING_SECONDS, resolved ones every REFRESH_SECONDS (a rename).
+-- keep: the roster's names are already the shared ones (a host change carries them); only new players get placeholders.
+function Host:SetNameResolver(fn, keep)
+    self.nameResolver = type(fn) == 'function' and fn or nil
+    if self.nameResolver and keep then for _, rec in pairs(self.roster.records) do rec.nameResolved = true end end
+    if self.nameResolver and not keep then
+        for _, rec in pairs(self.roster.records) do self:_placeholderName(rec) end
+        self.roster:_bump(); self:_broadcastRoster()
+    end
+end
+function Host:_placeholderName(rec)
+    if self.nameResolver and not rec.nameResolved then rec.name = require('gmp_player_names').Fallback(rec.slot) end
+end
+function Host:_tickNames()
+    local resolve = self.nameResolver
+    if not resolve then return end
+    local Names = require('gmp_player_names')
+    local now = self.clock()
+    local changed = false
+    for key, rec in pairs(self.roster.records) do
+        if now >= (rec.nameAskAt or 0) then
+            local ok, raw = pcall(resolve, key)
+            local name = ok and Names.Sanitize(raw) or nil
+            if name then
+                if rec.name ~= name then rec.name = name; changed = true end
+                rec.nameResolved = true
+            end
+            rec.nameAskAt = now + (rec.nameResolved and Names.REFRESH_SECONDS or Names.PENDING_SECONDS)
+        end
+    end
+    if changed then self.roster:_bump(); self:_broadcastRoster(); self:_broadcastLobby() end
+end
 function Host:Tick()
+    self:_tickNames()
     self:_admitWaiting()
     for _,peer in pairs(self.peers)do
         local budget=4
@@ -1330,7 +1370,9 @@ function Host:BeginDeparture()
     local frame=self.checkpointFrame
     local coordinator,reason=require('gmp_departure_coordinator').new{checkpoint=frame.state,sid=self.sid,
         term=self.authorityTerm or 1,sequence=frame.sequence,digest=frame.digest,kind='graceful',coordinator=self.identity.key,
-        paused=self.departureOptions.paused,ready=self.departureOptions.ready}
+        paused=self.departureOptions.paused,ready=self.departureOptions.ready,
+        -- D59: answers wait for everyone (or ANSWER_SECONDS); the best connection among the volunteers wins
+        clock=self.clock,rng=self.rng,rank=function(key) return self:PeerRank(key) end}
     if not coordinator then return false,reason end
     if not coordinator:_paused() then return false,'native_pause_unverified' end
     self.departure=coordinator;self.departureBroadcastAt=nil;return true
@@ -1358,14 +1400,46 @@ end
 function Host.handlers.DEPARTURE_CLAIM(self,peer,f)
     if not peer.key or not self.departure then return end
     local p=self.roster:Get(peer.key);if not p or p.conn~='connected' then return end
-    local ok,result=self.departure:Claim(peer.key,{sid=self.sid,term=f.term,revision=f.revision,key=peer.key,request=f.request})
+    local ok,result=self.departure:Claim(peer.key,{sid=self.sid,term=f.term,revision=f.revision,key=peer.key,request=f.request,answer=f.answer})
     self.departureBroadcastAt=nil
-    if ok then self:_log('Departure winner selected: %s term=%s; awaiting native application',peer.key,tostring(self.departure.commit.term)) end
+    self:_log('Departure answer from %s: %s',Identity.Mask(peer.key),f.answer==false and 'no' or 'yes')
+    if ok and self.departure.commit then self:_log('Departure winner selected: %s term=%s; awaiting native application',self.departure.winner,tostring(self.departure.commit.term)) end
     -- Election is not activation. Native transport integration consumes the
     -- selectedState/commit only after its own restoration and receipt barrier.
 end
+-- D59: the connection rank of a player for the departure choice: RTT plus a loss penalty (seconds; lower is
+-- better), from a link monitor per peer (gmp_presence LinkMonitor); nil while unknown.
+Host.LOSS_PENALTY_SECONDS=1
+function Host:_observeLinks(now)
+    local ok,P=pcall(require,'gmp_presence');local Monitor=ok and type(P)=='table' and P.LinkMonitor or nil
+    if not Monitor then return end
+    self.linkMonitors=self.linkMonitors or {}
+    for _,peer in pairs(self.peers) do
+        if peer.key and peer.link then
+            local m=self.linkMonitors[peer.key];if not m or m.peerId~=peer.peerId then m={peerId=peer.peerId,monitor=Monitor.new()};self.linkMonitors[peer.key]=m end
+            pcall(m.monitor.Observe,m.monitor,{peer.link},now)
+        end
+    end
+end
+function Host:PeerRank(key)
+    local m=self.linkMonitors and self.linkMonitors[key];if not m then return nil end
+    local ok,q=pcall(m.monitor.Quality,m.monitor)
+    if not ok or type(q)~='table' or type(q.rtt)~='number' then return nil end
+    return q.rtt+(type(q.loss)=='number' and q.loss or 0)*Host.LOSS_PENALTY_SECONDS
+end
 function Host:TickDeparture()
     local d=self.departure;local o=self.departureOptions
+    if d and d.phase=='offered' and type(d.Select)=='function' then
+        self:_observeLinks(self.clock())
+        local phase=d:Select()
+        if d.winner and d.commit then
+            self.departureBroadcastAt=nil
+            self:_log('Departure winner selected: %s (best connection among the volunteers) term=%s',d.winner,tostring(d.commit.term))
+        elseif phase=='declined' then
+            self.departureBroadcastAt=nil
+            self:_log('Departure: nobody became host; the run ends for everyone')
+        end
+    end
     if not d or d.phase~='selected' or self.handoverCommit or not o or o.allowGracefulRuntime~=true
         or type(o.prepare)~='function' then return end
     if not self.sharedPause or not self.sharedPause.paused then return end
@@ -1374,7 +1448,7 @@ function Host:TickDeparture()
     local count=0;for _ in pairs(d.required) do count=count+1 end
     local production=self.cfg.MODE=='production' and self.cfg.AUTH_MODE=='steam' and o.productionNative==true
     if production then if count<2 or count>self.cfg.MAX_PLAYERS then return end
-    elseif self.cfg.MODE~='dev' or count~=2 then return end
+    elseif self.cfg.MODE~='dev' or count<2 or count>Config.MAX_PLAYERS_LIMIT then return end   -- D54/D59: any count
     local ok,ready=pcall(o.prepare,d.selectedState,d.commit)
     if not ok or ready~=true then
         d.phase='failed';self.departureBroadcastAt=nil;self:_log('Departure preparation refused; session held');return
@@ -1641,6 +1715,24 @@ function Host:ReleaseReservation(key)
     local ok = self.roster:ReleaseReservation(key)
     if ok then self:_broadcastRoster() end
     return ok
+end
+
+-- t3 friend reports (Coder A): the host's Cancel closes the lobby. Every joined or waiting player is told (KICK
+-- host_closed; the client returns to the multiplayer screen) and its connection closes shortly after, as for a kick.
+-- Only in the lobby: a run in progress ends through End Run (D59).
+function Host:CloseLobby()
+    if self.roster.phase ~= "lobby" then return nil, "run_in_progress" end
+    local told = 0
+    for _, p in pairs(self.peers) do
+        if p.key or p.waiting then
+            self:_send(p, "KICK", { reason = "host_closed" })
+            p.key = nil; p.waiting = nil; p.closeAt = self.clock() + 1.5
+            told = told + 1
+        end
+    end
+    self.lobbyClosed = true
+    self:_log("host closed the lobby: %d player(s) told", told)
+    return true, told
 end
 
 function Host:Kick(key, reason)

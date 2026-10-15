@@ -30,14 +30,19 @@ function D:Model()
     self:Tick();local s=self:_current()
     if not s then return {active=false,canClaim=false} end
     local _,_,role=self:_current()
-    return {active=true,paused=true,canClaim=s.eligible==true and not s.winner and not self.pending
-            and type(self.options.claim)=='function',canLeave=role=='client' and type(self.options.leave)=='function',
+    local answered=s.receipt~=nil and s.receipt.accepted==true
+    local open=s.eligible==true and not s.winner and (s.phase==nil or s.phase=='offered') and not self.pending and not answered
+    return {active=true,paused=true,canClaim=open and type(self.options.claim)=='function',
+        canDecline=open and type(self.options.claim)=='function',answered=answered,
+        canLeave=role=='client' and type(self.options.leave)=='function',
         canCancel=role=='host' and s.phase=='offered' and not s.winner and type(self.options.cancel)=='function',
         pending=self.pending~=nil,winner=s.winner,error=self.error,players=s.players,
         status=self.pending and 'Requesting host authority...'
             or s.winner and ('Host selected: '..tostring(s.winner)..'. Restoring the session...')
-            or self.error or (role=='host' and 'Waiting for another player to become host. Cancel to keep hosting.'
-                or 'Host departure. Become host or quit to the main menu.')}
+            or s.phase=='declined' and 'Nobody became host. The run ends for everyone.'
+            or self.error or (role=='host' and 'Asking the other players who becomes the new host. Cancel to keep hosting.'
+                or answered and 'Waiting for the other players to answer...'
+                or 'The host is leaving. Become the new host?')}
 end
 function D:Cancel()
     local s=self:_current()
@@ -47,13 +52,15 @@ function D:Cancel()
     if accepted then self.pending=nil;self.error=nil end
     return accepted,why
 end
-function D:Claim()
+-- D59: answer false = "No" (Decline)
+function D:Decline() return self:Claim(false) end
+function D:Claim(answer)
     self:Tick();local s,session,role=self:_current()
     if not s or not self:Model().canClaim then return false,'claim_unavailable' end
     self.serial=self.serial+1
     local request=token(s)..':'..s.me..':'..self.serial
     self.pending={session=session,role=role,context=token(s),request=request};self.error=nil
-    local ok,accepted,why=pcall(self.options.claim,{sid=s.sid,term=s.term,revision=s.revision,key=s.me,request=request})
+    local ok,accepted,why=pcall(self.options.claim,{sid=s.sid,term=s.term,revision=s.revision,key=s.me,request=request,answer=answer~=false})
     if not ok or not accepted then self.pending=nil;self.error=ok and (why or 'claim_rejected') or 'claim_callback_failed';return false,self.error end
     return true
 end

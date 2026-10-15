@@ -9,8 +9,8 @@
 --   * level-ups: for each open REWARD_SCREEN of kind levelup (id = the team level) the client triggers one real
 --     level-up on its own pawn (XP_Current 0, XP_Target 1, AddExperience(1)): the game's own block runs (Level+1, its
 --     own cards, SetLuck, AddUpgrades, SpawnArtifacts). Done for level L once (Level - open pickers) >= L. A catch-up
---     screen levels up to the team level. Past the host's deadline (or once the host closed a screen) the client
---     auto-picks a card. A ghost (or dead player) skips with picked 0 and reports its level after reviving (D46).
+--     screen levels up to the team level. Past the host's deadline (the grace window for a level-up, D45 revised; or
+--     once the host closed a screen) the client auto-picks a card of its own still unanswered screen. A ghost (or dead player) skips with picked 0 and reports its level after reviving (D46).
 --   X.new{game=<adapter>, log=fn, ghost=function(ctx, session) -> bool}; x:Tick(ctx, session, now, inbox)
 local Wire = require('gmp_pickups_wire')
 local Host = require('gmp_xp_host')

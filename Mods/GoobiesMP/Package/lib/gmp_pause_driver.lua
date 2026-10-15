@@ -55,6 +55,27 @@ function D:Tick(now)
             end
         end
     end
+    -- t3 friend reports (Coder A): the game's Tab stats screen pauses everyone like a pause request (a client's too,
+    -- unlike its Esc menu), and closing it releases that request. With "Only host can pause" on, a client's Tab keeps
+    -- the game running for everyone, this player included (its own Tab freeze is removed; the stats stay open).
+    if o.world.InstallTabHook then o.world:InstallTabHook() end
+    local tab=o.world.ConsumeTabRequest and o.world:ConsumeTabRequest()
+    if tab then
+        local _,current=o.world:LocalWorldPawn()
+        if current and current:GetFullName()==tab.name then
+            local allowed,why=o.request(tab.paused)
+            if allowed then
+                if tab.paused and o.role()=='host' then o.world:AdoptEscapePause(tab.name) end
+                o.log('Tab stats '..(tab.paused and 'opened: pause requested for everyone' or 'closed: pause released'))
+            elseif tab.paused then
+                if not pause.paused and o.world.KeepEscMenuPlaying then o.world:KeepEscMenuPlaying(tab) end
+                if why=='host_only' then
+                    self.deniedUntil=now+2
+                    o.log('Tab stats: only the host can pause; game still in play')
+                end
+            end
+        end
+    end
     if o.role()=='host' and pause.revision>0 and (session.pauseQueuePending or not self.publishAt or now>=self.publishAt) then
         session:PublishPause();self.publishAt=now+1
     end
@@ -98,14 +119,8 @@ function D:Tick(now)
     end
     if state.paused then
         local players=o.role()=='host' and session.roster:Snapshot() or session:Display()
-        -- Name the roster slot and the host, like the Esc role label ("Player 1 - Host"): Steam players have no
-        -- persona name yet (every one is "Player"), so a name alone could not tell who paused.
-        local owner='a player'
-        for _,player in ipairs(players) do if player.key==state.owner then
-            owner=type(player.slot)=='number' and ('Player '..player.slot..(player.role=='host' and ' (host)' or '')) or (player.name or owner)
-            break
-        end end
-        o.world:SetPauseNotice('Paused by '..owner)
+        -- The shared name (a Steam persona name, the host's ROSTER; "Player <slot>" until known) and "(host)".
+        o.world:SetPauseNotice(require('gmp_player_names').PausedBy(players,state.owner))
     elseif (o.role()=='client' and state.hostOnly and self.clientMenuOpen)
         or (self.deniedUntil and now<self.deniedUntil) then
         o.world:SetPauseNotice('Only the host can pause. Game is still in play.')

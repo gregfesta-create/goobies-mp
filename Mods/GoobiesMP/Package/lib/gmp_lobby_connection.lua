@@ -41,6 +41,8 @@ function C:Model()
         canWait=self.waitOffer~=nil and snapshot~=nil and not joined and not self.pending or false,
         -- the local test lobby: anyone; a Steam lobby: clients (1.0.1)
         canLeave=joined and snapshot and (snapshot.scope=='local_sockets' or role=='client') and type(self.backend.Leave)=='function' or false,
+        -- t3 friend reports (Coder A): the host of a Steam lobby closes it (Cancel)
+        canClose=joined and role=='host' and snapshot~=nil and snapshot.scope~='local_sockets' and type(self.backend.CloseLobby)=='function' or false,
         -- Steam overlay invite while hosting a real Steam lobby (CROSS_PC_GAPS 1.1).
         canInvite=joined and role=='host' and snapshot~=nil and snapshot.scope~='local_sockets' and type(self.backend.CanInvite)=='function'
             and self.backend:CanInvite()==true or false}
@@ -125,6 +127,13 @@ function C:Cancel()
     local ok,accepted,why=pcall(self.backend.Cancel,self.backend,pending.request,pending.generation)
     if not ok or accepted~=true then return false,ok and (why or 'cancel_rejected') or 'cancel_callback_failed' end
     self.pending=nil;self.error=nil;self.waitOffer=nil;return true
+end
+-- t3 friend reports (Coder A): the host closes its lobby; everyone in it is told and returns to the multiplayer screen.
+function C:CloseLobby()
+    if not self.backend or type(self.backend.CloseLobby)~='function' then return false,'close_unavailable' end
+    local ok,accepted,why=pcall(self.backend.CloseLobby,self.backend)
+    if not ok or accepted~=true then return false,ok and (why or 'close_refused') or 'close_callback_failed' end
+    self.pending=nil;self.error=nil;return true
 end
 function C:Leave()
     if not self.backend or type(self.backend.Leave)~='function'then return false,'leave_unavailable'end

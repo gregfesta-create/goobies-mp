@@ -145,11 +145,14 @@ function N:_artifacts(menu)
     end
     return result
 end
-function N:ApplyClass(id)
+-- options.held (Coder B): a rejoin applies the class this player held in the run; the relaunched selector may show it
+-- locked (its unlock source can differ), so only an unknown class is refused then.
+function N:ApplyClass(id,options)
     local catalogue,why=self:Catalogue();if not catalogue then return false,why end
     local selected
     for _,entry in ipairs(catalogue.classes) do if entry.id==id then selected=entry end end
-    if not selected or not selected.available then return false,'class_locked_or_unknown' end
+    local held=type(options)=='table' and options.held==true
+    if not selected or (not selected.available and not held) then return false,'class_locked_or_unknown' end
     local ok,err=pcall(function()
         local menu=self:_menu();assert(menu:GetFullName()==catalogue.menu,'menu_changed')
         local actor=menu.BP_Menu

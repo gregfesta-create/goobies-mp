@@ -11,6 +11,8 @@ F.KEYS = {
     { 'ISLAND_HANDOFF', '1' }, { 'AUTHORITY_PREP', '1' }, { 'RUN_SYNC_ENEMIES', '1' }, { 'CLIENT_ATTACKS', '1' },
     { 'HOST_CREDITED_STATS', '1' }, { 'HOST_ENEMY_CAPTURE', '1' }, { 'CLIENT_ENEMY_ROWS', '1' }, { 'SHARED_PAUSE', '1' },
     { 'PRESENCE', '1' },
+    -- D32 shared lives (Coder C, user 2026-10-15): the host and every player die the same way, a ghost a teammate revives
+    { 'SHARED_LIVES', '1' },
     -- friend build (Coder D): the rest of the gameplay played in test 15 (its shared ini minus the dev keys)
     { 'SHARED_XP', '1' }, { 'ENEMY_FX', '1' }, { 'ENEMY_ATTACKS', '1' }, { 'PRESENCE_READ', '1' }, { 'PRESENCE_MARKERS', '1' },
     { 'PRESENCE_WORLD_SPACE', '1' }, { 'PRESENCE_SMOOTH', '1' }, { 'PRESENCE_ANIMATION', '1' }, { 'PRESENCE_APPEARANCE', '1' },

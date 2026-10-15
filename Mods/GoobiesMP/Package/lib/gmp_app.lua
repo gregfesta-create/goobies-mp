@@ -76,6 +76,10 @@ local function parseExtras(text)
         elseif k == "CLIENT_UPGRADE_DAMAGE" then x.clientUpgradeDamage=(v=="1" or v=="true")
         -- Dev-only run sync flag for Coder B (host enemy contact damages clients); forced off outside MODE=dev in App.new.
         elseif k == "CLIENT_DAMAGE" then x.clientDamage=(v=="1" or v=="true")
+        -- D32 shared lives (Coder C, user 2026-10-15: on in friend mode, so the host and every player die the same way:
+        -- a ghost a teammate revives). LIVES: the pool, 1-99 (default 3, gmp_run_sync_lives.lua).
+        elseif k == "SHARED_LIVES" then x.sharedLives=(v=="1" or v=="true")
+        elseif k == "LIVES" then local n=math.tointeger(tonumber(v)); x.lives=(n and n>=1 and n<=99) and n or nil
         elseif k == "SHARED_XP" then x.sharedXp=(v=="1" or v=="true")   -- D45 hook (Coder C)
         elseif k == "ENEMY_FX" then x.enemyFx=(v=="1" or v=="true")   -- D45 hook (Coder C)
         elseif k == "ENEMY_ATTACKS" then x.enemyAttacks=(v=="1" or v=="true")   -- D45 hook (Coder C)
@@ -157,6 +161,7 @@ function App.new(opts)
     if not Mode.Allows(self.cfg.MODE, "dev_scaffolding") then for _, row in ipairs(RESERVED_EXTRAS) do if row.devOnly then self.extras[row.field] = false end end end
     self.extras.clientUpgradeDamage = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.clientUpgradeDamage == true
     self.extras.clientDamage = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.clientDamage == true
+    self.extras.sharedLives = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.sharedLives == true   -- D32 (Coder C)
     self.extras.sharedXp = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.sharedXp == true   -- D45 hook (Coder C)
     self.extras.enemyFx = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.enemyFx == true   -- D45 hook (Coder C)
     self.extras.enemyAttacks = Mode.Allows(self.cfg.MODE, "gameplay") and self.extras.enemyAttacks == true   -- D45 hook (Coder C)
@@ -182,6 +187,17 @@ function App.new(opts)
 end
 
 function App:_log(...) self.env:Log(...) end
+-- Steam persona names for the host's roster (Host:SetNameResolver): GMP_Name_Get(steamId) -> name, 'ready' |
+-- nil, 'pending' | nil, reason (the native provider: GetPersonaName for the local user, GetFriendPersonaName after
+-- RequestUserInformation for the others). Without the export every player keeps the "Player <slot>" fallback.
+function App.SteamNameResolver(G)
+    return function(key)
+        local id = type(key) == 'string' and key:match('^steam:(%d+)$')
+        if not id or type(G) ~= 'table' or type(G.GMP_Name_Get) ~= 'function' then return nil end
+        local ok, name = pcall(G.GMP_Name_Get, id)
+        return ok and type(name) == 'string' and name or nil
+    end
+end
 -- Lean builds: a diagnostic whose module is not in this build is switched off with one log line (the config key
 -- stays readable; gmp_dev_modules.lua lists the modules a build may leave out).
 App.DIAGNOSTICS = {
@@ -248,7 +264,9 @@ function App:RunSync()
             flags = { runSyncEnemies = x.runSyncEnemies == true, clientAttacks = x.clientAttacks == true,
                 authorityPrep = x.authorityPrep == true, clientEnemyRows = x.clientEnemyRows == true,
                 clientUpgradeDamage = x.clientUpgradeDamage == true, clientDamage = x.clientDamage == true,
-                sharedXp = x.sharedXp == true, enemyFx = x.enemyFx == true, enemyAttacks = x.enemyAttacks == true },   -- sharedXp, enemyFx, enemyAttacks: D45 hook (Coder C)
+                sharedXp = x.sharedXp == true, enemyFx = x.enemyFx == true, enemyAttacks = x.enemyAttacks == true,   -- sharedXp, enemyFx, enemyAttacks: D45 hook (Coder C)
+                sharedLives = x.sharedLives == true },   -- D32 (Coder C): ghosts and revives for every player, the host included
+            lives = x.lives or 3,
             standinSelftest = function() return self:StandinSelftestAllowed() end }
         -- CLIENT_DAMAGE: the host tests contact against each client's presence position (host.presence); say so once.
         if x.clientDamage == true and self.role ~= 'client' and not (x.presence and x.presence.enabled) and not self.clientDamagePresenceNoted then
@@ -561,6 +579,7 @@ function App:_bootSteamLobby()
         end,
         activate=function(kind,result) return self:_activateSteamSession(kind,result) end,
         leave=function() return self:_leaveSteamLobby() end,
+        close=function() return self:_closeSteamLobby() end,   -- t3 friend reports (Coder A): the host's Cancel
         clock=function() return self.clockNow or 0 end,
         -- D53: the Host dropdown marks each Steam lobby 'same mods' / 'different mods' against this hash.
         modHash=function() return self.modManifest and require('gmp_lobby_browser').ModHash(self.modManifest) or nil end,
@@ -587,10 +606,28 @@ App.JOIN_REFUSED_TEXT = { run_in_progress = 'A game is in progress.', approval_r
 -- D52: a run in progress the player holds no slot in: it may wait for the next game (gmp_lobby_connection Wait).
 App.WAIT_OFFER = { run_in_progress = true, approval_required = true, rejoin_required = true }
 App.WAIT_OFFER_TEXT = 'A game is in progress. Wait for the next game?'
+-- t3 friend reports (Coder A): the refusal names both versions, so the players know who has to update.
+App.VERSION_REFUSED_TEXT = 'The host has Goobies MP %s; you have %s. Both players need the same version.'
+function App.VersionRefusedText(hostVersion, mine)
+    return string.format(App.VERSION_REFUSED_TEXT, tostring(hostVersion or '?'), tostring(mine or Config.MOD_VERSION))
+end
+-- t3 friend reports (Coder A): a first join that never reaches the host ends here (no reconnect loop), and a host
+-- that closed its lobby (Cancel) sends everyone back to the multiplayer screen with this.
+App.UNREACHABLE_TEXT = 'Could not reach the host. Check the lobby and press Join again.'
+App.HOST_CLOSED_TEXT = 'The host closed the lobby.'
 function App:_joinRefused(why)
     local offerWait = App.WAIT_OFFER[why] == true
     local text = offerWait and App.WAIT_OFFER_TEXT or App.JOIN_REFUSED_TEXT[why] or ('The host refused the join (' .. tostring(why) .. ').')
+    if why == 'version_mismatch' then
+        local c = self.client
+        local info = c and c.hostInfo
+        text = App.VersionRefusedText(info and info.modVer, c and c.localInfo and c.localInfo.modVer)
+    end
     self:_log('join refused by the host: %s', tostring(why))
+    return self:_endClientAttempt(text, offerWait)
+end
+-- t3 friend reports (Coder A): end the client's session attempt and show `text` on the multiplayer screen.
+function App:_endClientAttempt(text, offerWait)
     local connection = self.steamConnection
     if self.devSocketLobbyBackend and self.role == 'client' then
         if self.transport then pcall(self.transport.Close, self.transport) end
@@ -636,6 +673,36 @@ function App:_leaveSteamLobby()
     self:_clearSteamSession()
     self:_log('left the Steam lobby (voluntary LEAVE; the Steam lobby is left after the host acknowledges it)')
     return true
+end
+-- t3 friend reports (Coder A): the host's Cancel closes its Steam lobby. Everyone in it is told (Host:CloseLobby, KICK
+-- host_closed) and the host is back at the multiplayer screen at once; the old host keeps ticking for up to
+-- CLOSE_LOBBY_FLUSH_SECONDS so the reliable KICKs go out, then its authentication and transport end and the Steam
+-- lobby is left (leaving it first would end the messaging before the others are told).
+App.CLOSE_LOBBY_FLUSH_SECONDS = 2
+function App:_closeSteamLobby()
+    if self.role~='host' or not self.host then return false,'not_hosting' end
+    local host,transport,backend=self.host,self.transport,self.steamLobbyBackend
+    local ok,why=host:CloseLobby()
+    if not ok then return false,why end
+    self.host,self.transport=nil,nil
+    self:_clearSteamSession()
+    self.closingHost={host=host,transport=transport,untilAt=(self.clockNow or 0)+App.CLOSE_LOBBY_FLUSH_SECONDS,
+        after=function() if backend and type(backend.LeaveNative)=='function' then backend:LeaveNative() end end}
+    self:_log('host closed the lobby (Cancel); the others are told, then the Steam lobby is left')
+    return true
+end
+function App:_tickClosingHost()
+    local l=self.closingHost;if not l then return end
+    local h=l.host
+    pcall(h.Poll,h);pcall(h.Tick,h)
+    local open=false
+    for _,p in pairs(h.peers or {}) do if p.closeAt then open=true end end
+    if not open or (self.clockNow or 0)>=l.untilAt then
+        pcall(h.RetireAuthentication,h)
+        if l.transport and l.transport.Close then pcall(l.transport.Close,l.transport) end
+        if l.after then pcall(l.after) end
+        self.closingHost=nil
+    end
 end
 -- A client that left the lobby keeps resending its LEAVE until the host acknowledges it, then its transport is closed.
 function App:_tickLeavingClient()
@@ -995,7 +1062,9 @@ function App:_clearSteamSession()
     if self.gracefulControl then pcall(self.gracefulControl.ClearHandoverControl,self.gracefulControl);self.gracefulControl=nil end
     if self.steamAuthority then self.steamAuthority:Invalidate() end
     self.steamAuthority=nil;self.steamJoinMapping=nil;self.steamSessionCfg=nil
-    self.client=nil;self.host=nil;self.transport=nil;self.role=nil;self.steamAddress=nil;self.steamLobbyId=nil;self.state='steam_lobby';self.autoReconnect=false
+    self.client=nil;self.host=nil;self.transport=nil;self.role=nil;self.steamAddress=nil;self.steamLobbyId=nil;self.state='steam_lobby';self.autoReconnect=false    -- Coder B (friend test 1.0.0-test.3): the island flow is bound to this session (its session() closure); drop it
+    -- with the session, as the dev socket lobby does, so the next host or rejoin makes a fresh one (EnableIslands)
+    self.islandFlow=nil;self.islandHadWorld=false
 end
 -- Test 14: one process can play with several hosts in a row (left behind by host A, then host B). App state that
 -- belongs to one session (the rejoin cover, the island-reload marker, the live HUD, run-exit generations, End Run) is
@@ -1007,6 +1076,7 @@ function App:_resetSessionScoped()
     self.islandSignature = nil
     self.runExitGeneration, self.runExitDeferred = nil, nil
     self.endRunHandoverAt, self.endRunExit = nil, nil
+    self.clientReached = nil   -- t3 friend reports (Coder A): per session
     -- objects bound to one session's island world or players: rebuilt for the next session
     self.pauseDriver, self.knownConn = nil, nil
 end
@@ -1023,6 +1093,7 @@ function App:_activateSteamSession(kind,result)
     if kind=='create' and (math.type(mp)~='integer' or mp<2 or mp>Config.MAX_PLAYERS_LIMIT) then return false,'invalid_max_players' end
     self:_resetSessionScoped()
     local transport,why=require('gmp_steam_transport').new{G=self.bridge.G,clock=function() return self.clockNow end,rng=self.rng,
+        log=function(line) self:_log('%s',line) end,   -- t3 friend reports (Coder A): a refused connect frame is logged
         verifySwitch=function(role,term,commit)
             local pending=authority.pending
             return pending and commit and pending.session==commit.session and pending.term==term and pending.hostKey==commit.hostKey
@@ -1036,6 +1107,7 @@ function App:_activateSteamSession(kind,result)
         if result.owner~=self.identity.value then return false,'created_lobby_owner_mismatch' end
         local host,reason=Host.new(opts);if not host then return false,reason end
         local started,error=host:Start();if not started then return false,error end
+        host:SetNameResolver(App.SteamNameResolver(self.bridge.G))
         local published,publishError=authority:Initialize(host,result)
         if published~=true then host:RetireAuthentication();transport:Close();return false,publishError end
         self.host=host;self.role='host';self.state='hosting'
@@ -1062,7 +1134,12 @@ function App:_activateSteamSession(kind,result)
         self.client=client;self.role='client';self.state='client';self.steamAddress=mapping.address;self.autoReconnect=true
     else return false,'invalid_lobby_action' end
     self.transport=transport;self.steamLobbyId=result.lobbyId;self.steamSessionCfg=sessionCfg
-    self.authProvider=self.bridge.authProvider;self.clockFn=function()return self.clockNow end;return true
+    self.authProvider=self.bridge.authProvider;self.clockFn=function()return self.clockNow end
+    -- Coder B (friend test 1.0.0-test.3): a Steam session starts presence like the relay and in-memory sessions do.
+    -- Without it no PLAYER_STATE / WORLD_STATE was ever sent (lane 0), and the host enemy capture, which reads the
+    -- presence world, never started (no ENEMY_LIFE / ENEMY_MOTION on lanes 2/3).
+    self:_initPresence()
+    return true
 end
 -- Cross-PC 1.3: Steam rich presence for friends (status, "Join game" through connect, the player group), through
 -- the native GMP_Pres_Set(key, value) when it exists; only changed keys, at most once a second, our keys only.
@@ -1186,7 +1263,7 @@ end
 -- M3.1 presence. Entirely inert unless PRESENCE=1 in gmp_config.txt AND its own settings validate. The game-facing module (gmp_world) is only
 -- required here, after both checks, so with PRESENCE=0 nothing about presence is even loaded. opts.presenceWorld lets tests inject a fake world.
 function App:_initPresence()
-    local pc = self.extras.presence
+    local pc = type(self.extras) == 'table' and self.extras.presence or nil   -- Coder B: also from _activateSteamSession
     if self.presenceDriver or not pc or not pc.enabled then return end
     for _, e in ipairs(self.extras.presenceErrors or {}) do self:_log("presence config error: %s", e) end
     local ok, errs = Presence.Validate(pc)
@@ -1554,13 +1631,27 @@ function App:_tickIslands()
     end
     local session=self.role=='host' and self.host or self.client
     if not session then return end
-    if not self.islandFlow then
+    local function enable()
         session:EnableIslands()
         session:EnableTravelGate()
         if self.extras.sharedPause then
             session:EnablePause()
             if self.role=='host' then session:SetPauseHostOnly(self.extras.hostOnlyPause==true) end
         end
+    end
+    -- t3 friend reports (Coder A): "Island handoff stopped: ... attempt to index a nil value (field 'islands')". A Steam
+    -- Join after a refusal or after End Run makes a new session object while the flow still held the first one. The new
+    -- session gets its own islands, travel gate and pause, and the flow follows it; the game's hooks (the world) stay.
+    if self.islandFlow and not session.islands then
+        enable()
+        local old=self.islandFlow
+        self.islandFlow=require('gmp_island_flow').new({role=self.role,world=old.world,session=function() return session end,
+            now=function() return self.clockNow end,log=function(line) self:_log('%s',line) end})
+        self.islandSignature=nil
+        self:_log('ISLAND handoff follows the new %s session',tostring(self.role))
+    end
+    if not self.islandFlow then
+        enable()
         local Flow=require('gmp_island_flow');local World=require('gmp_island_world')
         local world
         world=(self.islandWorldFactory or World.new)(self.bridge.G,{
@@ -1571,6 +1662,13 @@ function App:_tickIslands()
             prepared=function() end,
             trace=function(line) self:_log('ISLANDTRAVEL role=%s %s',self.role,line) end,
             generated=function(generator)
+                -- Coder C (host death, 2026-10-15): a host world generated outside a run (its end-screen Retry after the
+                -- run ended for everyone) never starts an island run that waits for players: it leaves to the lobby,
+                -- where Start begins the next run for everyone (D51).
+                if self.role=='host' and self.host and self.host.roster and self.host.roster.phase~='run' then
+                    self:_log('HOST RETRY outside a run: leaving to the lobby (Start begins the next run for everyone)')
+                    return self:_endRunToMenu()
+                end
                 self.islandFlow:Generated(generator)
                 local activeSession=self.role=='host' and self.host or self.client
                 local state=activeSession.islands
@@ -1589,7 +1687,15 @@ function App:_tickIslands()
         flow:Menu();self.islandHadWorld=false;self:_log('ISLAND run ended; handoff reset for next run')
         -- D52: a client that quit its run to the menu while the host plays on leaves the session (the host holds the slot).
         local mirror=self.role=='client' and self.client and type(self.client.Roster)=='function' and self.client:Roster() or nil
-        if type(mirror)=='table' and mirror.phase=='run' and self.client:State()=='joined' then return self:_quitRunToMenu() end
+        if type(mirror)=='table' and mirror.phase=='run' and self.client:State()=='joined' then
+            -- D51: from the end screen the world closes for a Retry (it comes back) or for the menu: hold the session
+            if self.endScreenAt then
+                self.endScreenGoneAt=self.clockNow or 0
+                self:_log('END SCREEN: the world closed; holding the session for a Rejoin')
+                return
+            end
+            return self:_quitRunToMenu()
+        end
         -- W6: the host reaching the menu returns the run to the lobby (reservations kept, LOBBY_RETURN to clients).
         if self.role=='host' and self.host and self.host.roster.phase=='run' then
             local returned,generation=self.host:ReturnToLobby()
@@ -1956,6 +2062,7 @@ function App:Tick(dt)
     self:_tickBootDriver(dt)
     if self.state=='dev_socket_lobby'then self.clockNow=(self.clockNow or 0)+(dt or 0)end
     self:_tickLeavingClient()
+    self:_tickClosingHost()   -- t3 friend reports (Coder A): a closed lobby tells its players first
     self:_tickDevLobbyBeacon()
     if self.devSocketLobbyBackend then self.devSocketLobbyBackend:Snapshot()end
     self:_tickSteamLobby(dt)
@@ -2014,7 +2121,9 @@ function App:Tick(dt)
     self:_tickClientAttacks()
     self:_tickEndScreen()
     self:_tickRunExit()
+    self:_tickHostDeath()
     self:_tickEndRun()
+    self:_tickRejoinEndScreen()
     if self.extras.authCheck and self.state == "hosting" and not self.role then self:_tickAuthCheck(dt) end
     if not self.probesDone and self.env:Clock() >= self.extras.probeDelay and (self.extras.runtimeFacts or self.extras.s1Probe ~= "off") then
         self.probesDone = true
@@ -2433,6 +2542,10 @@ function App:_activateHandover(role,state,commit)
     self.handoverRuntimeHold=true
     self.role=role;self.host=role=='host' and session or nil;self.client=role=='client' and session or nil
     self.autoReconnect=role=='client'
+    -- a new Steam host keeps naming players by their persona names
+    if role=='host' and self.steamAuthority and type(session.SetNameResolver)=='function' then
+        session:SetNameResolver(App.SteamNameResolver(self.bridge and self.bridge.G),true)
+    end
     if self.steamAuthority and role=='client' then self.steamAddress=commit.hostKey:match('^steam:(%d+)$') end
     self.state=role=='host' and 'hosting' or 'client';self.reconnectAt=nil
     -- The world and its guarded native hooks survive migration; presentation
@@ -2556,7 +2669,7 @@ function App:RequestNormalDeparture()
     local members=0
     for _,player in ipairs(self.host.roster:Snapshot()) do if player.conn=='connected' then members=members+1 end end
     if allows(self,'dev_handover') then
-        if members~=2 then return false,'normal_native_participant_count_unsupported'end
+        if members<2 then return false,'normal_native_participant_count_unsupported'end   -- D54/D59: any count
     elseif allows(self,'production_native') and self.cfg.AUTH_MODE=='steam' then
         if members<2 or members>self.cfg.MAX_PLAYERS then return false,'normal_native_participant_count_unsupported'end
         local report,reason=require('gmp_native_lifecycle').Read(self,true)
@@ -2587,9 +2700,139 @@ end
 -- (its own menu exit returns the run to the lobby) when it cannot, or when the handover has not started
 -- END_RUN_HANDOVER_SECONDS later. A client leaves the run to the menu (the host holds its slot). The world is unpaused
 -- first (a paused world can hold the game's own exit). Logs "END RUN ...".
-App.END_RUN_HANDOVER_SECONDS = 8
+-- D59: the players have DepartureCoordinator.ANSWER_SECONDS (15 s) to answer "Become the new host?"; this covers
+-- the pause and checkpoint before the question as well.
+App.END_RUN_HANDOVER_SECONDS = 30
+-- D51 (revised 2026-10-14): a client's End Run in a multiplayer run opens the game's own end screen, as the game's
+-- End Run confirm does (WBP_HUD 2337: hide the Esc menu, Pause(true), Death(true)), and keeps the session: the end
+-- screen's Retry (labelled Rejoin, gmp_end_screen.lua) reloads the game world and the client re-enters the host's
+-- current run with its slot; Quit closes the session at the menu holding the slot (D52). Single player and the host are
+-- untouched. END_SCREEN_REJOIN_SECONDS: how long a closed world may take to come back (Retry) before the session is
+-- let go as at the menu.
+App.END_SCREEN_REJOIN_SECONDS = 20
+function App:_endScreenActive()
+    return self.role == 'client' and type(self.client) == 'table' and type(self.client.State) == 'function'
+        and self.client:State() == 'joined' or false
+end
+function App:_endRunToEndScreen()
+    local world = self.islandFlow and self.islandFlow.world
+    local okPawn, _, pawn = pcall(function() return world:LocalWorldPawn() end)
+    if not okPawn or not pawn then return false, 'no_pawn' end
+    local Exit = require('gmp_lobby_menu_exit')
+    if not Exit.Callable(pawn.Death) then return false, 'no_death_event' end
+    local hud = pawn.HUD
+    pcall(function()
+        if hud and hud:IsValid() then
+            if hud.pause_menu then hud.pause_menu:SetVisibility(2) end
+            if hud.pausemenu_overlay then hud.pausemenu_overlay:SetVisibility(2) end
+        end
+    end)
+    if type(world.SetSharedPaused) == 'function' then pcall(world.SetSharedPaused, world, false) end
+    if Exit.Callable(pawn.Pause) then pcall(pawn.Pause, pawn, true, false, true, true) end
+    local ok, why = pcall(pawn.Death, pawn, true)
+    if not ok then return false, 'death_failed:' .. tostring(why):sub(1, 120) end
+    self.endScreenAt, self.endScreenGoneAt = self.clockNow or 0, nil
+    self:_log('END RUN: client on the end screen (session kept; Retry rejoins, Quit leaves holding the slot)')
+    return true
+end
+function App:_mainMenuVisible()
+    return require('gmp_end_screen').MainMenuVisible(self.bridge and self.bridge.G)
+end
+function App:_tickRejoinEndScreen()
+    -- Coder C (host death): a host on the game's own death screen in a run keeps playing as a ghost-less spectator;
+    -- its Retry is disabled so it can never restart the run under the others.
+    if self.role == 'host' and self.hostGameDeath and type(self.host) == 'table' and type(self.host.roster) == 'table'
+        and self.host.roster.phase == 'run' and self.bridge and self.bridge.G then
+        self.hostDeathScreen = self.hostDeathScreen or require('gmp_end_screen').new({ G = self.bridge.G, mode = 'host',
+            active = function() return self.hostGameDeath == true end, log = function(line) self:_log('%s', line) end })
+        self.hostDeathScreen:Tick(self.clockNow or 0)
+    end
+    if self:_endScreenActive() and self.bridge and self.bridge.G then
+        self.rejoinLabel = self.rejoinLabel or require('gmp_end_screen').new({ G = self.bridge.G,
+            active = function() return self:_endScreenActive() end, log = function(line) self:_log('%s', line) end })
+        local shown = self.rejoinLabel:Tick(self.clockNow or 0)
+        -- Coder C (client death, 2026-10-15): the game's own end screen after the client died holds the session too,
+        -- so its Retry (Rejoin) takes the client back into the run (like End Run, D51); the run goes on for the others.
+        if shown and not self.endScreenAt then
+            self.endScreenAt, self.endScreenGoneAt = self.clockNow or 0, nil
+            self:_log('END SCREEN: the client died; holding the session for a Rejoin')
+        end
+    end
+    if not self.endScreenAt then return end
+    if not self:_endScreenActive() then self.endScreenAt, self.endScreenGoneAt = nil, nil; return end
+    if self.endScreenGoneAt then
+        if self.islandHadWorld then
+            self.endScreenAt, self.endScreenGoneAt = nil, nil
+            self:_log('END SCREEN: Rejoin: back in the host run')
+        elseif self:_mainMenuVisible() or (self.clockNow or 0) - self.endScreenGoneAt >= App.END_SCREEN_REJOIN_SECONDS then
+            self.endScreenAt, self.endScreenGoneAt = nil, nil
+            self:_log('END SCREEN: at the menu; leaving the run holding the slot')
+            self:_quitRunToMenu()
+        end
+    end
+end
+-- Host death (Coder C; user 2026-10-15: "I did not want the host to die"; the takeover "is meant so that if the host
+-- is kicked, or crashes, the client can take over"). A host dying in game is like any player dying: with the shared
+-- lives (D32, SHARED_LIVES) it is a ghost a teammate revives, and with no lives left it stays a ghost. Never a host
+-- handover (D59 is only the host's own End Run; a crash or kick is the host-loss takeover) and never the end of the
+-- run, unless EVERY player is down (the shared lives ended): then the run returns to the lobby and everyone gets the
+-- end screen together. A death outside the shared lives (the game's own death screen) is logged once and the run goes
+-- on; hostGameDeath keeps the host's end-screen Retry from restarting the run under the others (gmp_end_screen).
+function App:_tickHostDeath()
+    if self.role ~= 'host' or type(self.host) ~= 'table' or type(self.host.roster) ~= 'table' or self.host.roster.phase ~= 'run' then return end
+    local sync = self.runSync
+    local okStatus, status = false, nil
+    if type(sync) == 'table' and type(sync.Status) == 'function' then okStatus, status = pcall(sync.Status, sync) end
+    local lives = okStatus and type(status) == 'table' and type(status.lives) == 'table' and status.lives or nil
+    if lives and lives.ended == true then
+        self:_log('EVERYONE DOWN: the shared lives ended; everyone gets the end screen together')
+        local returned, generation = self.host:ReturnToLobby()
+        if returned then self:_log('EVERYONE DOWN: LOBBY_RETURN runGeneration=%d', generation) end
+        return
+    end
+    local world = self.islandFlow and self.islandFlow.world
+    if type(world) ~= 'table' or type(world.LocalWorldPawn) ~= 'function' then return end
+    local ok, dead = pcall(function() local _, pawn = world:LocalWorldPawn(); return pawn ~= nil and pawn.PlayerIsDead == true end)
+    if not ok or not dead or self.hostGameDeath then return end
+    self.hostGameDeath = true
+    self:_log('HOST DIED (the game death screen, outside the shared lives): the run goes on; no handover, no end')
+end
+-- No freeze (coordinator, test.3 "end run freezes game"): a handover held after a failure is let go after
+-- HANDOVER_FAILED_RELEASE_SECONDS, and one that never finishes after HANDOVER_MAX_SECONDS: the hold and the shared
+-- pause are released and the run ends here (the host returns it to the lobby: everyone's end screen; then the menu exit).
+App.HANDOVER_FAILED_RELEASE_SECONDS = 20
+App.HANDOVER_MAX_SECONDS = 90
+function App:_releaseHeldHandover(why)
+    self:_log('HANDOVER released (%s): unpaused; the run ends here (end screen or menu)', tostring(why))
+    local session = self.role == 'host' and self.host or self.client
+    self.handoverRuntime, self.handoverRuntimeHold, self.handoverReleaseApplied, self.handoverGame = nil, nil, nil, nil
+    self.handoverStartedAt, self.handoverFailedAt = nil, nil
+    if type(session) == 'table' then session.handoverHold = nil end
+    local world = self.islandFlow and self.islandFlow.world
+    if type(world) == 'table' then
+        if type(world.SetSharedPaused) == 'function' then pcall(world.SetSharedPaused, world, false) end
+        if type(world.SetPauseNotice) == 'function' then pcall(world.SetPauseNotice, world, nil) end
+    end
+    if self.role == 'host' and type(session) == 'table' then
+        if type(session.sharedPause) == 'table' and type(session.sharedPause.ReleaseHandover) == 'function' then
+            pcall(session.sharedPause.ReleaseHandover, session.sharedPause, self.identity and self.identity.key)
+        end
+        if type(session.PublishPause) == 'function' then pcall(session.PublishPause, session) end
+        if type(session.roster) == 'table' and session.roster.phase == 'run' and type(session.ReturnToLobby) == 'function' then
+            pcall(session.ReturnToLobby, session)
+        end
+    end
+    local ok, exiting = pcall(self._endRunToMenu, self)
+    if not ok then self:_log('HANDOVER released: menu exit unavailable (%s); the end screen Quit leaves', tostring(exiting):sub(1, 160)) end
+    return ok and exiting
+end
 function App:RequestEndRun()
     self:_log('END RUN requested role=%s', tostring(self.role))
+    if self.role == 'client' and self:_endScreenActive() then
+        local ok, why = self:_endRunToEndScreen()
+        if ok then return true end
+        self:_log('END RUN: end screen unavailable (%s); leaving through the menu', tostring(why))
+    end
     if self.role == 'host' and self.host then
         local ok, why = false, 'no_handover'
         if allows(self, 'dev_handover') or allows(self, 'production_native') then
@@ -2616,7 +2859,27 @@ function App:_endRunToMenu()
         log = function(line) self:_log('%s', line) end }
     return self.endRunExit:Request('end_run', self.clockNow or 0)
 end
+-- D59: nobody became host: the run ends for everyone. The host returns the run to the lobby (LOBBY_RETURN: every
+-- client gets its host-credited end screen, W9) and the host gets the game's own end screen too; the join list keeps
+-- everyone (D20 holds), so anyone can rejoin.
+function App:_endRunForEveryone()
+    self.endRunHandoverAt = nil
+    if self.host and self.host.roster.phase == 'run' then
+        local returned, generation = self.host:ReturnToLobby()
+        if returned then self:_log('END RUN: nobody became host; LOBBY_RETURN runGeneration=%d', generation) end
+    end
+    -- the declined offer goes out once more (inactive), so every client's question closes
+    self.host.departureBroadcastAt = nil; pcall(self.host.BroadcastDeparture, self.host)
+    self.host.departure = nil
+    local world = self.islandFlow and self.islandFlow.world
+    if type(world) == 'table' and type(world.SetSharedPaused) == 'function' then pcall(world.SetSharedPaused, world, false) end
+    local ok = self:_endRunToEndScreen()
+    if not ok then return self:_endRunToMenu() end
+    return true
+end
 function App:_tickEndRun()
+    local d = self.endRunHandoverAt and self.role == 'host' and self.host and self.host.departure
+    if d and d.phase == 'declined' then return self:_endRunForEveryone() end
     if self.endRunHandoverAt then
         if not self.normalDeparturePending then self.endRunHandoverAt = nil
         elseif (self.clockNow or 0) - self.endRunHandoverAt >= App.END_RUN_HANDOVER_SECONDS then
@@ -2665,9 +2928,21 @@ function App:_enforceHandoverFailureHold()
     end
 end
 function App:_tickHandover()
+    if not self.handoverRuntime then self.handoverStartedAt,self.handoverFailedAt=nil,nil end
     if self.handoverRuntime then
         self.handoverRuntime:Tick(self.clockNow)
         local control=self.handoverRuntime.control
+        -- Coder C (no freeze): the time limits of a held or unfinished handover (App.HANDOVER_*_SECONDS)
+        local now=self.clockNow or 0
+        self.handoverStartedAt=self.handoverStartedAt or now
+        if control.failed then
+            self.handoverFailedAt=self.handoverFailedAt or now
+            if now-self.handoverFailedAt>=App.HANDOVER_FAILED_RELEASE_SECONDS then
+                return self:_releaseHeldHandover('failed '..tostring(control.failed)..':'..tostring(control.failureReason))
+            end
+        elseif control.phase~='finished' and now-self.handoverStartedAt>=App.HANDOVER_MAX_SECONDS then
+            return self:_releaseHeldHandover('not finished in '..App.HANDOVER_MAX_SECONDS..' s')
+        end
         if self.handoverRuntimeHold and not control.failed and control.phase~='finished' then
             local world=self.islandFlow and self.islandFlow.world
             if world and type(world.SetPauseNotice)=='function' then
@@ -2841,6 +3116,18 @@ function App:_tickClient()
     end
     -- Only the host's join decisions end the attempt; transient refusals (e.g. a reused dev ticket) retry as before.
     if st == 'rejected' and self.lastClientState ~= 'rejected' and App.JOIN_REFUSED_TEXT[why] then self:_joinRefused(why) end
+    -- t3 friend reports (Coder A): the host closed its lobby (Cancel): back to the multiplayer screen with the reason.
+    -- A first Steam join that never reached the host ends with a message instead of reconnecting with fresh
+    -- authentications; a player who was in (joined or waiting) keeps the automatic reconnect (test 9).
+    if st == 'joined' or st == 'waiting' then self.clientReached = true end
+    if st == 'kicked' and why == 'host_closed' and self.lastClientState ~= 'kicked' then
+        self.lastClientState = st; self:_log('the host closed the lobby')
+        return self:_endClientAttempt(App.HOST_CLOSED_TEXT)
+    end
+    if st == 'disconnected' and App.RECONNECT_REASONS[why] and not self.clientReached and self.steamLobbyBackend then
+        self.lastClientState = st; self:_log('join: the host never answered (%s); the attempt ends', tostring(why))
+        return self:_endClientAttempt(App.UNREACHABLE_TEXT)
+    end
     self.lastClientState = st
     if st == "disconnected" and self.autoReconnect and App.RECONNECT_REASONS[why] then
         if self.clientInRun and not self.connectionLost then self:_connectionLostBegin(why) end

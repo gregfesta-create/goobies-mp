@@ -6,7 +6,8 @@
 --   * opens one 'levelup' barrier (gmp_reward_barrier.lua) per level gained, for every connected player, holding the
 --     shared pause (reason PAUSE_REASON) while any barrier is open; REWARD_SCREEN tells clients open/deadline/closed;
 --   * marks the host done for level L once (Level - open pickers) >= L, and auto-picks a card of its own picker when a
---     barrier's deadline expired (D44/D45: the others auto-pick about 2 s after the first pick);
+--     barrier's deadline expired (D45 revised: each player picks their own; a level-up is auto-picked only when still
+--     unanswered after the grace window; roulettes keep the D44 2 s auto-click, gmp_reward_barrier.QUICK_KINDS);
 --   * opens a 'catchup' barrier for one player whose level report (REWARD_DONE id 0) is below the team level (D46:
 --     late rejoin, revived ghost), with the D46 budget;
 --   * credits a client's bounded report of its own local bonus orbs (PICKUP_LOCAL_XP, D46) to the team;

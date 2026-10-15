@@ -194,7 +194,10 @@ function Client.handlers.STEAM_AUTHORITY_PROOF(self,f)
     local peer=self.transport:PeerIdentity(self.peerId)
     if not peer or peer.key~=f.hostKey or f.hostKey~=self.authenticatedHostKey or f.term<1 or f.term>0xffffffff
         or type(f.proofNonce)~='string' or #f.proofNonce~=32 or not f.proofNonce:match('^[0-9a-f]+$')
-        or (self.state=='joined' and f.term~=(self.authenticatedAuthorityTerm or self.expectedAuthorityTerm or self.authorityTerm or 1))
+        -- Coder C (2026-10-15): a fresh process (a crashed host rejoining, or any player joining after a takeover) has no
+        -- term yet and takes the first one its authenticated host proves; a client that knows a term keeps it.
+        or (self.state=='joined' and (self.authenticatedAuthorityTerm or self.expectedAuthorityTerm or self.authorityTerm)
+            and f.term~=(self.authenticatedAuthorityTerm or self.expectedAuthorityTerm or self.authorityTerm))
         or (self.expectedAuthorityTerm and f.term~=self.expectedAuthorityTerm) then
         self.transport:Close(self.peerId)
         return self:_setState('disconnected','authority_term_or_identity_mismatch')
@@ -914,7 +917,7 @@ function Client:ClaimDeparture(request)
     if not state or not state.active or not state.paused or not state.eligible or state.winner
         or type(request)~='table' or request.key~=self.identity.key or request.sid~=self.sid
         or request.term~=state.term or request.revision~=state.revision then return false,'departure_claim_unavailable' end
-    return self:_send('DEPARTURE_CLAIM',{term=request.term,revision=request.revision,request=request.request})
+    return self:_send('DEPARTURE_CLAIM',{term=request.term,revision=request.revision,request=request.request,answer=request.answer~=false})
 end
 
 function Client:State() return self.state, self.reason end

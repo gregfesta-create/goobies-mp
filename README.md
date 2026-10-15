@@ -1,12 +1,12 @@
 # Goobies Multiplayer (friend test build)
 
-Online multiplayer for Goobies, played with friends over Steam. **Version 1.0.0-test.3 is a friend test build:** it is still
+Online multiplayer for Goobies, played with friends over Steam. **Version 1.0.0-test.4 is a friend test build:** it is still
 in development, things will break, and it exists so we can test together. It is not the final release.
 
 ## Requirements
 
 - Goobies on Steam (Windows). Every player needs their own copy.
-- **Requires Mod Menu 1.1.0-test.2 or newer**: [download it here](https://github.com/gregfesta-create/goobies-mod-menu/releases/tag/v1.1.0-test.2); install both, in any order.
+- **Requires Mod Menu 1.1.0-test.3 or newer**: [download it here](https://github.com/gregfesta-create/goobies-mod-menu/releases/tag/v1.1.0-test.3); install both, in any order.
   Every Goobies mod needs Mod Menu; it also brings the UE4SS mod loader.
 - Optional: Menu Options ([goobies-menu-options](https://github.com/gregfesta-create/goobies-menu-options/releases)).
 - Every player must use the same builds. The lobby compares the mods when you join.
@@ -17,7 +17,7 @@ in development, things will break, and it exists so we can test together. It is 
    (the folder with `Shooter-Win64-Shipping.exe`); below this is called `Win64`.
 2. Back up `%LOCALAPPDATA%\Shooter\Saved\SaveGames`.
 3. If Windows marks a downloaded zip as blocked: right-click it, *Properties*, tick **Unblock**.
-4. Put `goobies_mp_1.0.0-test.3.zip` and the Mod Menu zip into `Win64` and extract each there (*right-click > Extract All*, target `Win64`
+4. Put `goobies_mp_1.0.0-test.4.zip` and the Mod Menu zip into `Win64` and extract each there (*right-click > Extract All*, target `Win64`
    itself). The two zips share no files, so install both, in any order. Menu Options, if you want it, also goes into `Win64`.
 5. **Achievements:** Mod Menu blocks them by itself (`Win64\Mods\ModMenuGuard`; nothing to move or rename). While
    Mod Menu is installed no Steam achievement unlocks and no stat or leaderboard score is sent, in single player too. If

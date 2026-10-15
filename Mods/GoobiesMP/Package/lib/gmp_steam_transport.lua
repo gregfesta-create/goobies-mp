@@ -12,7 +12,7 @@ function T.new(options)
   if type(G[name])~='function' then return nil,'native_network_missing' end
  end
  return setmetatable({G=G,clock=options.clock or os.clock,rng=options.rng or math.random,
-  peers={},bySteam={},events={},serial=0,retired={},verifySwitch=options.verifySwitch,authorityTerm=1,
+  peers={},bySteam={},events={},serial=0,retired={},verifySwitch=options.verifySwitch,authorityTerm=1,log=options.log,
   lanes=Lanes.Counter.new((options.clock or os.clock)())},T)
 end
 function T:Name()return 'Steam messages (native)' end
@@ -44,6 +44,9 @@ function T:Connect(address)
  local old={};for _,peer in pairs(self.peers) do old[#old+1]=peer end
  for _,peer in ipairs(old) do self:_drop(peer,'reconnecting',true) end
  self.mode='client';self.address=address;self.nonce=string.format('%08x',self.rng(0,0x7fffffff));self.connectAt=0
+ -- t3 friend reports: a Join after a refusal or End Run sent nothing (native sent n1=0): the old Steam message session
+ -- with this host is ended first, so the connect frames start a fresh one.
+ pcall(self.G.GMP_Net_Close,address);self.connectRefusedLogged=nil
  return true
 end
 function T:Send(peerId,data)
@@ -88,7 +91,12 @@ function T:LaneLine(now)
 end
 function T:Poll()
  if self.mode=='client' and not self.bySteam[self.address] and self.clock()>=(self.connectAt or 0) then
-  self.connectAt=self.clock()+.25;self:_send(self.address,'GMP2|C|'..self.nonce)
+  self.connectAt=self.clock()+.25
+  local sent,why=self:_send(self.address,'GMP2|C|'..self.nonce)
+  -- t3 friend reports: a refused connect frame is logged once per attempt, with the native reason
+  if not sent and not self.connectRefusedLogged and type(self.log)=='function' then
+   self.connectRefusedLogged=true;pcall(self.log,'Steam connect frame refused by the native network: '..tostring(why))
+  end
  end
  for _=1,T.POLL_MAX do
   local ok,steam,text=pcall(self.G.GMP_Net_Poll)

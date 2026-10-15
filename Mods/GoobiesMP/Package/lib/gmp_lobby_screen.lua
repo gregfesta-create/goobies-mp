@@ -53,7 +53,8 @@ function Screen:_connectionModel(connection)
     local model=connection and connection:Model() or {available=false,status='Steam lobby transport is not available in this build.'}
     local picker=self:_hostPicker(model)
     return {title=model.scope=='local_sockets' and 'Local Steam Sockets test' or 'Multiplayer',scope=model.scope,
-        status=self.actionError and (Screen.REASON_TEXT[self.actionError] or ('Lobby action refused: '..self.actionError)) or model.status,rows={},kicks={},warnings={},colors={},connection=true,
+        status=self.actionError and (self.actionError=='host_other_version' and self.refusalText
+            or Screen.REASON_TEXT[self.actionError] or ('Lobby action refused: '..self.actionError)) or model.status,rows={},kicks={},warnings={},colors={},connection=true,
         settings={},hostPicker=picker,
         actions=self:_connectionActions(model,picker)}
 end
@@ -62,7 +63,8 @@ end
 function Screen:_hostPicker(model)
     local choices={}
     for _,lobby in ipairs(type(model.lobbies)=='table' and model.lobbies or {}) do
-        choices[#choices+1]={id=lobby.id,label=lobby.label,joinable=lobby.joinable~=false}
+        choices[#choices+1]={id=lobby.id,label=lobby.label,joinable=lobby.joinable~=false,
+            refusal=lobby.refusal,tooltip=lobby.refusal}   -- t3 friend reports (Coder A): why it cannot be joined
     end
     -- Test 15: a host the player picked stays picked while its lobby misses a beacon or is full (Join waits); only an
     -- automatic preselection (the single joinable host) is dropped when that host goes away.
@@ -114,6 +116,13 @@ function Screen:Model()
         actions[#actions+1]={id=localLobby and 'leave_local_lobby' or 'leave_lobby',label=localLobby and 'Leave local lobby' or 'Leave lobby',enabled=true,
             tooltip=not localLobby and 'Leave this lobby and return to the multiplayer screen.' or nil}
     end
+    -- t3 friend reports (Coder A): the host's Cancel (close the lobby) sits in the bottom row between Ready and Invite
+    -- friends, a framework button like them; off during the start countdown (that row's first button cancels it)
+    if connectionState and connectionState.canClose and source.mode=='host' then
+        local counting=source.lobby and source.lobby.state=='countdown'
+        actions[#actions+1]={id='close_lobby',label='Cancel',enabled=not counting,
+            tooltip=counting and 'Cancel the countdown first.' or 'Close this lobby. Everyone in it returns to the multiplayer screen.'}
+    end
     if connectionState and connectionState.canInvite then actions[#actions+1]={id='invite_friends',label='Invite friends',enabled=true,
         tooltip='Open the Steam invite list for this lobby.'} end
     local counting=start.id=='cancel_countdown'
@@ -134,10 +143,11 @@ function Screen:Model()
     end
     local departure=self:_departure()
     if departure and departure.active then
+        -- D59: "Become the new host?" Yes / No; the best connection among the volunteers becomes the host
         actions=departure.canCancel and {{id='cancel_departure',label='Cancel departure',enabled=true}} or {
-            {id='become_host',label='Become host',enabled=departure.canClaim==true,
-                tooltip='The first accepted claimant becomes host. Returning players join that host.'},
-            {id='leave',label='Quit to menu',enabled=departure.canLeave~=false},
+            {id='become_host',label='Yes',enabled=departure.canClaim==true,
+                tooltip='Volunteer to host. The volunteer with the best connection becomes the new host.'},
+            {id='decline_host',label='No',enabled=departure.canDecline==true,tooltip='Do not host.'},
         }
     end
     local rows=departure and departure.active and departure.players or Ui.Rows(source);local mine
@@ -155,7 +165,7 @@ function Screen:Model()
     local default=session_cfg_default(source)
     local maxPlayers={value=source.roster and source.roster.maxPlayers or default,default=default,
         editable=source.mode=='host' and source.roster and source.roster.phase=='lobby' and not (departure and departure.active) or false}
-    return {title=departure and departure.active and 'Host transfer' or 'Multiplayer lobby',scope=connectionState and connectionState.scope,mode=source.mode,rows=rows,
+    return {title=departure and departure.active and 'Become the new host?' or 'Multiplayer lobby',scope=connectionState and connectionState.scope,mode=source.mode,rows=rows,
         maxPlayers=maxPlayers,
         lobbyId=self.options.lobbyId and self.options.lobbyId() or nil,
         settings=departure and departure.active and {} or Ui.Settings(source),
@@ -310,6 +320,8 @@ function Screen:Activate(id,value)
                 self.hostChoice,self.hostChoiceLabel,self.hostPicked=value,c.label,true;self.hostListOpen=false
                 log('pick_host '..tostring(value)..' ('..tostring(c.label)..')');self:Refresh();return true
             end
+            -- t3 friend reports (Coder A): another version: the reason, in plain words, on the screen
+            if c.id==value and c.refusal then self.refusalText=c.refusal;return false,'host_other_version' end
         end
         return false,'host_unavailable'
     end
@@ -337,6 +349,10 @@ function Screen:Activate(id,value)
             if id=='join_lobby' and connection:Model().scope~='local_sockets' then
                 local lobby,reason=Invite.ParseLobbyId(value);if not lobby then return false,reason end
                 value=lobby
+                -- t3 friend reports (Coder A): a listed lobby on another Goobies MP version is not joined; say why
+                for _,c in ipairs(self:_hostPicker(connection:Model()).choices) do
+                    if c.id==value and c.refusal then self.refusalText=c.refusal;return false,'host_other_version' end
+                end
             end
             ok,why=connection:Begin(id=='create_lobby' and 'create' or 'join',
                 id=='create_lobby' and {maxPlayers=connection.o and connection.o.maxPlayers or Config.Defaults().MAX_PLAYERS} or {lobbyId=value})
@@ -358,6 +374,11 @@ function Screen:Activate(id,value)
         else n=tonumber(text);if not n or n~=math.floor(n) or not text:match('^%d+$') then return false,'max_players_invalid' end;n=math.tointeger(n) end
         local ok,why=session:SetLobbyMaxPlayers(n);self:Refresh();return ok,why
     end
+    if id=='close_lobby' then
+        local connection=self:_connection()
+        if not connection or not connection:Model().canClose then return false,'close_unavailable' end
+        local ok,why=connection:CloseLobby();self:Refresh();return ok,why
+    end
     if id=='leave_local_lobby' or id=='leave_lobby' then
         local connection=self:_connection()
         if not connection or not connection:Model().canLeave then return false,'leave_unavailable'end
@@ -369,6 +390,7 @@ function Screen:Activate(id,value)
     local ok,why
     if departure and departure.active then
         if self.options.departureController and id=='become_host' then ok,why=self.options.departureController:Claim()
+        elseif self.options.departureController and id=='decline_host' then ok,why=self.options.departureController:Decline()
         elseif self.options.departureController and id=='cancel_departure' then ok,why=self.options.departureController:Cancel()
         elseif self.options.departureController and id=='leave' then ok,why=self.options.departureController:Leave()
         elseif id=='become_host' and departure.canClaim==true and self.options.claim then ok,why=self.options.claim()

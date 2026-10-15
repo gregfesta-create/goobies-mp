@@ -1,6 +1,9 @@
 -- D45/D44/D46 (Coder C): the shared reward-screen barrier. Pure logic, no game objects, no messages. Used for level-ups
 -- (gmp_xp_host.lua) and, by Coder B, for roulettes (D44): every listed player gets their own screen(s) under the shared
--- pause; once the first player finishes, the others auto-pick after autoPickSeconds (D44/D45: about 2 s). Ghosts and
+-- pause. D45 revised (user, friend test 2026-10-15, "picking upgrades picked for both players"): every player picks
+-- their own screen. Only a roulette (QUICK_KINDS, D44) auto-clicks for the others autoPickSeconds (about 2 s) after the
+-- first player finishes; any other screen (level-up, loot, bush) waits graceSeconds after the first finisher, and only
+-- a screen still unanswered then is auto-picked, by that player's own side. Ghosts and
 -- players who leave count as done (D46: ghosts get their missed picks after reviving, as a catch-up barrier). A
 -- catch-up barrier (late rejoin, revive) starts with a fixed budget instead (D46: 30 s under 10 missed levels, about
 -- 3 s more per extra level). A player who neither picks nor auto-picks is forced done graceSeconds after the deadline,
@@ -17,6 +20,7 @@ local B = {}; B.__index = B
 B.KINDS = { levelup = true, loot = true, bush = true, reward = true, roulette = true, catchup = true }
 B.AUTO_PICK_SECONDS = 2
 B.GRACE_SECONDS = 10
+B.QUICK_KINDS = { roulette = true, reward = true }   -- D44: the roulette screens (PresentRoulette) keep the 2 s auto-click
 
 function B.CatchupSeconds(missed)
     missed = math.max(0, math.floor(missed or 0))
@@ -55,7 +59,8 @@ function B:Done(id, key, now)
     local b = self.open[id]
     if not b or b.state[key] ~= 'waiting' then return false end
     b.state[key] = 'done'
-    if not b.deadlineAt then b.deadlineAt = now + self.autoPick end
+    -- the first finisher starts the window: 2 s for a roulette, the grace window for a screen with a choice (D45 revised)
+    if not b.deadlineAt then b.deadlineAt = now + (B.QUICK_KINDS[b.kind] and self.autoPick or self.grace) end
     return true
 end
 -- Done without starting the deadline (a ghost skips its screen; D46: it gets the pick after reviving).

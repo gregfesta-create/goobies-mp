@@ -317,6 +317,32 @@ end
 function W:ConsumeEscapeRequest()
     local request=self.escapeRequest;self.escapeRequest=nil;return request
 end
+-- t3 friend reports (Coder A): the game's Tab stats screen. BP_Player's Inventory action (Tab) toggles HUD.tab and
+-- then pauses the game itself on open and resumes it on close (ubergraph 14886 -> 14436..14885; dump
+-- evidence/lobby_departure_static_20261011/BP_Player.txt). Our Esc hook never saw it, so a client's Tab froze only its
+-- own game. The post hook reads the new HUD.tab state; a Tab the game ignored (DisableTab, the state unchanged) and a
+-- reward screen (PresentTime?, its own pause) request nothing. The pause driver turns it into a shared pause request.
+W.TAB_ACTION='/Game/Blueprints/BP_Player.BP_Player_C:InpActEvt_Inventory_K2Node_InputActionEvent_0'
+function W:InstallTabHook()
+    if self.tabHook then return true end
+    if type(self.G.RegisterHook)~='function' or not valid(self.G.StaticFindObject(W.TAB_ACTION)) then return false end
+    self.G.RegisterHook(W.TAB_ACTION,function(context)
+        if not self.options.active() then return end
+        local pawn=context:get()
+        if not self:_game(pawn) or pawn['PresentTime?']==true then return end
+        local hud=pawn.HUD;local tab=valid(hud) and hud.tab
+        if not valid(tab) then return end
+        local opened=tab:GetVisibility()==0
+        if self.tabOpen==opened then return end
+        self.tabOpen=opened
+        self.tabRequest={name=pawn:GetFullName(),paused=opened,previous=not opened}
+        if self.options.trace then self.options.trace('Tab stats open='..tostring(opened)) end
+    end)
+    self.tabHook=true;return true
+end
+function W:ConsumeTabRequest()
+    local request=self.tabRequest;self.tabRequest=nil;return request
+end
 function W:InstallResumeHook()
     if self.resumeHook then return true end
     local path='/Game/UI/WBP_HUD.WBP_HUD_C:BndEvt__WBP_HUD_resume_K2Node_ComponentBoundEvent_1_Click__DelegateSignature'
@@ -446,7 +472,12 @@ function W:UpdatePauseMenu(state,role,request)
     menu.button:SetIsEnabled(enabled)
     menu.button:SetToolTipText(self.G.FText(state.locked and 'Host handover in progress' or
         (not enabled and 'Only the host can pause' or 'Pause or unpause the game for everyone')))
-    menu.button.t_text:SetText(self.G.FText(state.paused and 'Unpause' or 'Pause'))
+    -- test.3: through the button's own UpdateButtonText (a rebuild re-applies ButtonText; the default is "Bingos")
+    local text=state.paused and 'Unpause' or 'Pause'
+    local update=menu.button.UpdateButtonText
+    if type(update)=='function' or type(update)=='userdata' then
+        if menu.text~=text then menu.button:UpdateButtonText(self.G.FText(text));menu.text=text end
+    else menu.button.t_text:SetText(self.G.FText(text)) end
     menu.request=request;menu.enabled=enabled
     if not self.pauseButtonHook then
         local path='/Game/UI/WBP_Button.WBP_Button_C:BndEvt__WBP_Button01_b_button_K2Node_ComponentBoundEvent_3_OnButtonClickedEvent__DelegateSignature'
